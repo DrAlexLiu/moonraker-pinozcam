@@ -30,6 +30,25 @@ start_delay = 60
 # Percentage of performance cores the detector may use: 50, 75 or 100.
 cpu_percent = 50
 
+[web]
+# Serves the annotated frame (detection boxes drawn on the camera image).
+#   http://<printer>:58888/snapshot   single frame
+#   http://<printer>:58888/stream     MJPEG
+#
+# This is not a settings UI -- it exists so the annotated view can be added
+# to Mainsail/Fluidd as just another webcam. Obico does not need a local
+# port because it ships frames to its cloud; PiNozCam has no cloud, so the
+# view has to be reachable locally.
+#
+# 58888 is deliberately far from 8080/8081, which crowsnest uses for real
+# cameras. Set to 0 to disable and rely on Telegram/Discord alone.
+port = 58888
+
+# Register the above with Moonraker on startup, so it appears in
+# Mainsail/Fluidd's camera list with no manual setup. Set false to leave
+# Moonraker's database untouched and add it yourself.
+register_webcam = true
+
 [action]
 # What to do when a failure is confirmed: none | pause | stop
 on_failure = pause
