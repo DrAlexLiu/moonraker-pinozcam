@@ -76,7 +76,6 @@ class Detector(object):
         self._buffer = None
         self._buffer_max_age = None
         self._mask_fits = True
-        self._last_sampled_jpeg = None
         self.last_result = None
         # The one line worth putting in front of the user when detection is
         # not working. Setup failure used to be logged and nothing else, so
@@ -96,7 +95,6 @@ class Detector(object):
         # Kept so a /check command can answer with a real photo rather than
         # fetching its own, which would race the detection loop for the
         # camera and cost an extra second.
-        self.last_jpeg = None
         self.backend_name = None
         self.camera_source = None
 
@@ -219,6 +217,20 @@ class Detector(object):
                                    daemon=True)
         sampler.start()
 
+        try:
+            self._consume()
+        finally:
+            # ⚠️ Unconditional. Without it an exception anywhere in the loop
+            # left the sampler thread running against a source nobody reads
+            # and the inference daemon alive for the life of the service.
+            self._stop.set()
+            self._buffer.close()
+            sampler.join(timeout=5)
+            self._teardown()
+            self._log.info("Detection stopped")
+
+    def _consume(self):
+        """Score the best candidate the sampler offers, until stopped."""
         while not self._stop.is_set():
             tick = time.monotonic()
             self._refresh()
@@ -234,6 +246,16 @@ class Detector(object):
             if self._paused_by_switch:
                 self._paused_by_switch = False
                 self._log.info("enable_ai is on again; analysing.")
+            # ⚠️ Checked BEFORE taking. take() REMOVES what it returns,
+            # so testing the interval afterwards discarded the sharpest
+            # candidate the buffer held -- and kept the buffer drained, so
+            # the frame eventually scored was whichever single one happened
+            # to be there. That defeats the selection the buffer exists for.
+            if (self._detection_interval
+                    and tick - self._last_check_at < self._detection_interval):
+                self._pace(tick)
+                continue
+
             frame = self._buffer.take(timeout=CONSUMER_WAIT)
 
             if frame is None:
@@ -254,11 +276,6 @@ class Detector(object):
                 self._notify_camera(
                     "\u26a0\ufe0f Camera is back. Print failure detection "
                     "has resumed.")
-            # Minimum interval between checks, a brake for slow hosts.
-            if (self._detection_interval
-                    and tick - self._last_check_at < self._detection_interval):
-                self._pace(tick)
-                continue
             self._last_check_at = tick
 
             try:
@@ -271,10 +288,7 @@ class Detector(object):
 
             self._pace(tick)
 
-        self._buffer.close()
-        sampler.join(timeout=5)
-        self._teardown()
-        self._log.info("Detection stopped")
+
 
     def _sample(self):
         """Grab frames, measure them, and offer them to the buffer.
@@ -294,14 +308,14 @@ class Detector(object):
             last_seq = frame.sequence
             try:
                 image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
+                # The SOURCE size, captured before the transform -- which is
+                # what mask.signature is defined against.
+                self._check_mask_fits(image.size)
                 image = camera.transform_image(image, self.camera_source,
                                                logger=self._log)
-                self._check_mask_fits(
-                    Image.open(BytesIO(frame.jpeg_bytes)).size)
                 score = (self._measure_sharpness(image)
                          if self._buffer.should_measure() else float("-inf"))
                 self._buffer.put(image, score, tick)
-                self._last_sampled_jpeg = frame.jpeg_bytes
             except Exception as exc:                         # noqa: BLE001
                 self._log.debug("could not sample a frame: %s", exc)
             self._pace(tick)
@@ -464,7 +478,6 @@ class Detector(object):
         sampler does both, because it has to decode anyway to measure
         sharpness.
         """
-        self.last_jpeg = self._last_sampled_jpeg
         image = candidate.image
 
         # Mask before inference, not after: painting the ignored region

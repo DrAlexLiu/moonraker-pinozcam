@@ -31,12 +31,18 @@ class St:
 class Cli:
     def __init__(self): self.state=St(); self.calls=[]
     def printer_name(self): return "testprinter"
+    # Added when notify.printer_id stopped using the display name as an
+    # identity: Discord packs it into a colon-separated custom_id, so it
+    # needs something stable and colon-free.
+    def instance_tag(self): return "printer-abcd1234"
     def pause_print(self): self.calls.append("pause"); self.state=St("paused",True)
     def resume_print(self): self.calls.append("resume"); self.state=St("printing")
     def cancel_print(self): self.calls.append("cancel"); self.state=St("cancelled")
 class Cfg:
     def get(self,*a): return ""
     def get_section(self,s): return {}
+    # Read by the alert budget added with max_notification/notify_interval.
+    notification = {"max_notification": 0, "notify_interval": 0}
 
 JPEG = None
 def build():

@@ -292,16 +292,25 @@ def grab_jpeg(source, logger=None, timeout=8.0):
     """
     import threading
     url = source.snapshot_url or ""
-    if not url.startswith("file://") and _probe(url) != \
-            "multipart/x-mixed-replace":
-        # The common case: one bounded GET, no thread.
+    if not url.startswith("file://"):
+        # ⚠️ ONE request in the common case. This used to _probe() first and
+        # then fetch, so every call cost two round trips to the camera --
+        # and the page's idle path calls it twice a second. The response
+        # itself says whether it is a still or a stream, so ask once and
+        # read the answer.
         try:
-            r = requests.get(url, timeout=(3.0, 6.0))
-            if r.status_code == 200 and r.content[:2] == b"\xff\xd8":
-                return r.content
+            r = requests.get(url, stream=True, timeout=(3.0, 6.0))
+            try:
+                kind = (r.headers.get("Content-Type") or "").split(";")[0]
+                if r.status_code == 200 and kind.strip() != \
+                        "multipart/x-mixed-replace":
+                    body = r.content
+                    return body if body[:2] == b"\xff\xd8" else None
+            finally:
+                # Close without draining: a stream never ends on its own.
+                r.close()
         except requests.RequestException:
-            pass
-        return None
+            return None
 
     reader = build_frame_source(source, logger=logger)
     stop = threading.Event()
