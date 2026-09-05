@@ -508,6 +508,10 @@ class AnnotatedView(object):
             "camera_ok": self._camera_reachable(),
         }
         if detector is not None:
+            # Shown as a banner on the page. Without it a detector that
+            # failed to start looked identical to one that was simply idle.
+            if detector.last_error:
+                out["error"] = detector.last_error
             stats = detector.window.stats
             out.update({"window_frames": stats["window_frames"],
                         "alarming": stats["alarming"],

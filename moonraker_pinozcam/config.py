@@ -217,6 +217,41 @@ class Config(object):
     @property
     def logging(self):
         return {
-            "path": self.get("logging", "path") or None,
+            "path": self._log_path(),
             "level": (self.get("logging", "level", "INFO") or "INFO").upper(),
         }
+
+    def _log_path(self):
+        """The log file to write, or None for journald only.
+
+        An ABSENT `path` means "use the default"; a `path` that is present
+        but empty means "no file". Those have to be distinguished by asking
+        whether the option exists, because get() strips whitespace, so the
+        two look identical by value.
+        """
+        if self._cp.has_option("logging", "path"):
+            return self.get("logging", "path") or None
+        return self._default_log_path()
+
+    def _default_log_path(self):
+        """`<printer_data>/logs/moonraker-pinozcam.log`, if that exists.
+
+        Logging to a file is ON by default, unlike a bare systemd service,
+        because on a Klipper host that directory IS the log UI: Mainsail's
+        Machine -> Logs page lists the files in it, and klippy, moonraker,
+        crowsnest and KlipperScreen all write there. A service that only
+        reached journald would be the one component a user cannot read
+        without SSH.
+
+        Derived from where the config file actually is rather than from
+        $HOME, because a multi-printer host has several printer_data
+        directories and this process is told which one by its --config
+        path. Falls back to no file (journald only) if the layout is not
+        the standard one -- guessing a path and creating a stray directory
+        would be worse than logging to one place.
+        """
+        config_dir = os.path.dirname(self.path)          # .../config
+        logs = os.path.join(os.path.dirname(config_dir), "logs")
+        if os.path.isdir(logs):
+            return os.path.join(logs, "moonraker-pinozcam.log")
+        return None

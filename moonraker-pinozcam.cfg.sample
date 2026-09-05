@@ -122,5 +122,10 @@ register_webcam = true
 
 # ---- Logging ------------------------------------------------------------
 [logging]
+# Both optional. By default PiNozCam logs to the journal AND to
+# <printer_data>/logs/moonraker-pinozcam.log -- the same directory klippy,
+# moonraker and crowsnest use, which is what Mainsail's Machine -> Logs
+# page lists. Set path to move it, or write `path =` with nothing after it
+# to turn the file off and keep only `journalctl -u moonraker-pinozcam`.
 # path = ~/printer_data/logs/moonraker-pinozcam.log
 # level = INFO

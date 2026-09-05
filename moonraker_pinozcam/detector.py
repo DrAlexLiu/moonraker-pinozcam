@@ -56,6 +56,11 @@ class Detector(object):
         self._backend = None
         self._fired = False                # one action per print, not per frame
         self.last_result = None
+        # The one line worth putting in front of the user when detection is
+        # not working. Setup failure used to be logged and nothing else, so
+        # the page showed "AI not started" with no reason and the user had
+        # to find the journal to learn the backend was missing.
+        self.last_error = None
         # Kept so a /check command can answer with a real photo rather than
         # fetching its own, which would race the detection loop for the
         # camera and cost an extra second.
@@ -140,8 +145,10 @@ class Detector(object):
             self._setup()
         except Exception as exc:                             # noqa: BLE001
             self._log.error("Detection could not start: %s", exc)
+            self.last_error = "Detection could not start: %s" % exc
             self._teardown()
             return
+        self.last_error = None
 
         # aiStartDelay's whole purpose: the first layer looks wrong to a
         # detector trained on established prints, so skip it rather than
@@ -170,12 +177,16 @@ class Detector(object):
                     self._log.warning(
                         "No camera frame for %ds -- detection is blind",
                         int(CAMERA_OFFLINE_AFTER))
+                    self.last_error = (
+                        "No camera frame for %ds -- detection is blind."
+                        % int(CAMERA_OFFLINE_AFTER))
                 self._pace(tick)
                 continue
 
             if camera_warned:
                 camera_warned = False
                 self._log.info("Camera is back; detection resumed")
+                self.last_error = None
             last_seq = frame.sequence
             last_frame_at = time.monotonic()
 
@@ -183,6 +194,9 @@ class Detector(object):
                 self._score(frame)
             except Exception as exc:                         # noqa: BLE001
                 self._log.error("Frame scoring failed: %s", exc)
+                self.last_error = "Frame scoring failed: %s" % exc
+            else:
+                self.last_error = None
 
             self._pace(tick)
 
