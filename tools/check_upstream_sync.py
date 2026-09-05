@@ -54,6 +54,24 @@ ALLOWED_DIFF = {
     "nozcam_backend.py": 18,
 }
 
+# Individual METHODS copied verbatim out of a module that is otherwise not
+# shared. notify.py cannot be shared whole -- it is written against
+# OctoPrint's plugin mixin -- but its two command handlers are the other
+# half of telegram_bot.py's and discord_bot.py's protocol, which ARE
+# shared. Re-implementing them from a description produced three
+# simultaneous defects that no unit test without a real button could see:
+# Discord's confirm:/cancel: custom_ids matched against Telegram's
+# yes:/no:, confirmation nonces looked up under the wrong channel, and
+# replies returned as strings that both transports discard. So they are
+# copied, and checked here at function granularity.
+SHARED_METHODS = {
+    "notify.py": [
+        "handle_telegram_command", "handle_discord_command",
+        "_action_state_problem", "check_reply",
+        "telegram_send_with_reply", "get_printer_status",
+    ],
+}
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCAL_DIR = os.path.join(HERE, "moonraker_pinozcam")
 
@@ -111,6 +129,71 @@ def check_modules():
     return drifted, missing, checked
 
 
+def extract_method(text, name):
+    """The exact source of one method, or None.
+
+    Indentation-based rather than AST-based on purpose: this must work on
+    upstream text that may use syntax this interpreter does not parse.
+    """
+    lines = text.splitlines(keepends=True)
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip().startswith("def %s(" % name):
+            start = index
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("    def ") or lines[index].startswith(
+                "class "):
+            end = index
+            break
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return "".join(lines[start:end])
+
+
+def check_methods():
+    """Compare the individually-copied methods, not whole files."""
+    drifted, checked = [], 0
+    for module, names in SHARED_METHODS.items():
+        local_path = os.path.join(LOCAL_DIR, module)
+        if not os.path.isfile(local_path):
+            print("  ! %-22s not present locally" % module)
+            drifted.append(module)
+            continue
+        with open(local_path, encoding="utf-8") as handle:
+            local_text = handle.read()
+        try:
+            upstream_text = fetch(RAW % (UPSTREAM, module)).decode("utf-8")
+        except (urllib.error.URLError, OSError) as exc:
+            print("  ? %-22s upstream unreachable (%s)" % (module, exc))
+            continue
+        for name in names:
+            checked += 1
+            mine = extract_method(local_text, name)
+            theirs = extract_method(upstream_text, name)
+            label = "%s:%s" % (module, name)
+            if theirs is None:
+                # Upstream removed or renamed it. Not automatically wrong,
+                # but it means this copy no longer tracks anything.
+                print("  GONE %-34s not in upstream any more" % label)
+                drifted.append(label)
+            elif mine is None:
+                print("  MISS %-34s not copied here" % label)
+                drifted.append(label)
+            elif mine == theirs:
+                print("  OK   %-34s %s"
+                      % (label, digest(mine.encode("utf-8"))))
+            else:
+                got = diff_line_count(theirs.encode("utf-8"),
+                                      mine.encode("utf-8"))
+                print("  DIFF %-34s %d differing lines" % (label, got))
+                drifted.append(label)
+    return drifted, checked
+
+
 def check_runtime_version():
     pinned = None
     path = os.path.join(HERE, "scripts", "install_runtime.py")
@@ -142,6 +225,10 @@ def main():
 
     print("Shared modules (must be byte-identical to upstream):")
     drifted, missing, checked = check_modules()
+    print("\nMethods copied verbatim out of an unshared module:")
+    method_drift, method_count = check_methods()
+    drifted += method_drift
+    checked += method_count
     print("\nRuntime version:")
     version_ok = check_runtime_version()
     print("\n%d checked, %d drifted, %d missing"
@@ -150,8 +237,13 @@ def main():
     if drifted:
         print("\nResync from the OctoPrint build:")
         for name in drifted:
-            print("  cp ../test/octoprint_pinozcam/%s moonraker_pinozcam/%s"
-                  % (name, name))
+            if ":" in name:
+                module, method = name.split(":", 1)
+                print("  re-copy %s() from ../test/octoprint_pinozcam/%s"
+                      % (method, module))
+            else:
+                print("  cp ../test/octoprint_pinozcam/%s "
+                      "moonraker_pinozcam/%s" % (name, name))
         print("\nIf a local change is intentional, that module no longer "
               "belongs in SHARED -- move it out and record why.")
 

@@ -461,9 +461,9 @@ class AnnotatedView(object):
             # were rejected is configured but not connected, and that is
             # exactly the state a user needs to see.
             "telegram": bool(notifier is not None
-                             and notifier.telegram is not None),
+                             and notifier.telegram_bot is not None),
             "discord": bool(notifier is not None
-                            and notifier.discord is not None),
+                            and notifier.discord_bot is not None),
             "camera_ok": self._camera_reachable(),
         }
         if detector is not None:
