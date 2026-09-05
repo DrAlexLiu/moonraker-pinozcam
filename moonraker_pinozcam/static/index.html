@@ -171,7 +171,7 @@ footer a:hover{color:var(--accent)}
           <svg viewBox="0 0 640 512"><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c8.4-19.3 10.6-41.4 4.8-63.3c-11.1-41.5-47.8-69.4-88.6-71.1c-5.8-.2-9.2 6.1-7.4 11.7c2.1 6.4 3.3 13.2 3.3 20.3c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zM373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5L373 389.9z"/></svg>
         </button>
         <button class="icon-btn" id="b-live" hidden
-          title="Show the camera's own live stream instead of the analysed frames">
+          title="Hold the analysed frames instead of the camera's live stream">
           <svg viewBox="0 0 576 512"><path d="M0 128C0 92.7 28.7 64 64 64H320c35.3 0 64 28.7 64 64V384c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V128zM559.1 99.8c10.4 5.6 16.9 16.4 16.9 28.2V384c0 11.8-6.5 22.6-16.9 28.2s-23 5-32.9-1.6l-96-64L416 337.1V320 192 174.9l14.2-9.5 96-64c9.8-6.5 22.4-7.2 32.9-1.6z"/></svg>
         </button>
         <button class="icon-btn" id="b-settings" title="PiNozCam settings">
@@ -658,39 +658,72 @@ $("b-welcome-done").onclick=async()=>{
 };
 
 /* ---------- the live view -------------------------------------------
-   Modelled on the OctoPrint build, which does NOT re-serve a video
-   stream: it polls status, refetches a single still only when frame_id
-   moves, and draws the detection boxes in the browser from normalised
-   coordinates. Boxes travel as numbers rather than burned into the JPEG,
-   so a frame is fetched once and the picture stays the camera's own.
+   The OctoPrint build's model, and the reason this is a moving picture:
+   the <img> points at the CAMERA'S OWN stream and stays there. Nothing is
+   polled to make the picture move -- the camera does that at its own
+   frame rate, straight to the browser, costing this service nothing.
 
-   Two deliberate Klipper-only differences:
-   * /stream (MJPEG) still exists, because PiNozCam registers its
-     annotated view as a webcam and Mainsail's camera list needs a stream
-     URL. This page simply does not use it.
-   * Live Camera points the browser straight at the printer's own camera
-     through nginx, so watching between prints costs this service
-     nothing. */
-let liveMode=false, lastFrameId=null, streamInfo=null;
+   The detector's own frame is a three-second INTERRUPTION, not the normal
+   view: when a check comes back alarming, the annotated still takes over
+   the same <img> so the boxes are actually seen, then the stream comes
+   back. Upstream calls this the flash (`aiFlashActive`, AI_FLASH_MS).
 
-function applyFlip(){
+   Stills are the fallback, not the plan: no usable stream URL (see
+   web.stream_info for the rules that withhold one) means polling
+   frame_id and refetching a single JPEG each time it moves.
+
+   ⚠️ One Klipper-only difference: the boxes are already burned into the
+   JPEG. Upstream ships coordinates and draws them over the picture in
+   the browser; this build annotates server-side because it also
+   registers that view as a Moonraker webcam, and Mainsail renders it as
+   a plain <img> that cannot draw anything of its own. */
+const FLASH_MS=3000;
+let pinAnalysis=false;          // the button: hold the analysed view
+let flashActive=false, flashFrameId=null, flashTimer=null;
+let wantFrameId=null, shownSrc=null, streamInfo=null;
+
+function liveShowing(){ return !!streamInfo&&!pinAnalysis&&!flashActive; }
+
+function refresh(){
+  const live=liveShowing();
+  $("b-live").hidden=!streamInfo;
+  $("b-live").classList.toggle("primary",!!streamInfo&&!live);
+  // The raw stream is untransformed, so only it needs the flips.
   const f=[];
-  if(liveMode&&streamInfo){
+  if(live){
     if(streamInfo.flipH)f.push("scaleX(-1)");
     if(streamInfo.flipV)f.push("scaleY(-1)");
   }
-  // The raw stream is untransformed, so only it needs the flips.
   $("view").style.transform=f.join(" ");
-}
-
-function showLive(on){
-  liveMode=on&&!!streamInfo;
-  $("b-live").classList.toggle("primary",liveMode);
-  lastFrameId=null; applyFlip();
-  $("view").src=liveMode?streamInfo.url:("snapshot?"+Date.now());
+  // ⚠️ A hidden tab must DROP the stream, not just stop looking at it: an
+  // <img> on an MJPEG URL holds the connection open, and ustreamer counts
+  // clients. Blanking the src closes it; becoming visible re-opens it.
+  const src=live?(document.hidden?"":streamInfo.url)
+                :("snapshot?"+encodeURIComponent(wantFrameId||Date.now()));
+  if(src!==shownSrc){ shownSrc=src; $("view").src=src; }
   drawBoxes();
 }
-$("b-live").onclick=()=>showLive(!liveMode);
+
+function cancelFlash(){
+  flashActive=false;
+  if(flashTimer){ clearTimeout(flashTimer); flashTimer=null; }
+}
+
+/* Interrupt the stream for one alarming frame. Keyed on frame_id so a
+   status poll that repeats the same frame does not restart the timer and
+   hold the still up forever. */
+function noteAnalysis(d){
+  if(d.frame_kind!=="analysis"||d.frame_alarming!==true)return;
+  if(d.frame_id&&d.frame_id===flashFrameId)return;
+  flashFrameId=d.frame_id;
+  flashActive=true;
+  if(flashTimer)clearTimeout(flashTimer);
+  flashTimer=setTimeout(()=>{ flashTimer=null; flashActive=false; refresh(); },
+                        FLASH_MS);
+}
+
+$("b-live").onclick=()=>{ pinAnalysis=!pinAnalysis; cancelFlash(); refresh(); };
+document.addEventListener("visibilitychange",refresh);
 
 function drawBoxes(){
   /* ⚠️ Only the MASK is drawn here, never detection boxes.
@@ -703,7 +736,11 @@ function drawBoxes(){
      they would be invisible rather than outlined. */
   const cv=$("overlay"), img=$("view");
   if(!img.clientWidth)return;
-  if(!count()||liveMode){ cv.style.display="none"; return; }
+  // ⚠️ Hidden over the live stream, as upstream hides its own overlay: the
+  // grid is aligned to the frame the DETECTOR sees -- already rotated, and
+  // flipped by the server -- while the raw stream is untransformed and
+  // flipped back in CSS. Drawn over it the zone would sit mirrored.
+  if(!count()||liveShowing()){ cv.style.display="none"; return; }
   drawMask(cv,img,false);
   cv.style.display="block";
 }
@@ -742,14 +779,11 @@ async function poll(){
     if(d.version)$("ver").textContent="PiNozCam for Moonraker "+d.version;
 
     streamInfo=d.stream||null;
-    $("b-live").hidden=!streamInfo;
-    if(liveMode&&!streamInfo)showLive(false);
-    if(!liveMode&&d.frame_id&&d.frame_id!==lastFrameId){
-      // Refetch only when the picture actually changed; /snapshot's ETag
-      // makes even that cheap when it has not.
-      lastFrameId=d.frame_id;
-      $("view").src="snapshot?"+encodeURIComponent(d.frame_id);
-    }
+    // Refetch only when the picture actually changed; /snapshot's ETag
+    // makes even that cheap when it has not.
+    if(d.frame_id)wantFrameId=d.frame_id;
+    noteAnalysis(d);
+    refresh();
 
     if(alarming){
       const t=new Date().toLocaleTimeString();
@@ -767,10 +801,17 @@ window.addEventListener("resize",()=>{ drawBoxes();
   if($("d-mask").classList.contains("open"))redrawEditor(); });
 $("view").addEventListener("load", drawBoxes);
 
-/* An <img> pointed at an MJPEG stream never reconnects: when the service
-   restarts the connection dies and the element just sits on its last frame,
-   or blank. Nothing in the page notices, so the picture stays dead until
-   someone reloads -- which is exactly what it looked like when the service
-   was restarted underneath an open tab. Watch for it and re-point. */
-$("view").src="snapshot?"+Date.now();
+/* Show something before the first status answers: no stream URL is known
+   yet, so this is the still fallback, and the first refresh() replaces it
+   with the camera's own stream if there is one.
+
+   ⚠️ An <img> pointed at an MJPEG stream never reconnects on its own: if
+   the camera restarts, the connection dies and the element sits on its
+   last frame with nothing in the page noticing. Re-point it. */
+$("view").addEventListener("error",()=>{
+  if(!liveShowing())return;
+  shownSrc=null;                       // force refresh() to re-assign
+  setTimeout(refresh,2000);
+});
+refresh();
 </script>

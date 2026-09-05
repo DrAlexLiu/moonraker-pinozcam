@@ -838,6 +838,22 @@ class AnnotatedView(object):
         self._log.info("Annotated view on http://0.0.0.0:%d/stream", port)
         if self._cfg.get("register_webcam", True):
             self._register(port)
+        # ⚠️ Resolve the camera NOW, off the request path. The page shows the
+        # camera's own stream whenever stream_info() can name one, and that
+        # answer depends on a source only ever resolved lazily by the first
+        # /snapshot -- so a freshly started service told the first status
+        # poll there was no stream, and the page opened on a still it then
+        # had to replace. Resolution costs an HTTP probe and must not run on
+        # /api/status, which is polled every two seconds.
+        threading.Thread(target=self._warm_camera, name="pinozcam-webcam-warm",
+                         daemon=True).start()
+
+    def _warm_camera(self):
+        """Populate _camera_source once, so the first poll knows the stream."""
+        try:
+            self._live_camera_jpeg()
+        except Exception:                                    # noqa: BLE001
+            pass        # no camera yet; the next /snapshot resolves it
 
     def _register(self, port):
         """Publish this view to Moonraker so frontends list it.
