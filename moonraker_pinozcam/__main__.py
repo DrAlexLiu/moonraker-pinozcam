@@ -71,7 +71,9 @@ def main(argv=None):
         host=mr_cfg["host"], port=mr_cfg["port"], api_key=mr_cfg["api_key"],
         logger=LOG)
 
-    action = (cfg.action["on_failure"] or "pause").lower()
+    # 0 = notify only, 1 = pause, 2 = stop -- the OctoPrint build's own
+    # encoding, read fresh on every failure so a saved change applies.
+    ACTION_NAMES = {1: "Print paused", 2: "Print stopped"}
 
     def latest_jpeg():
         """A frame for /check -- the annotated one if there is one.
@@ -127,28 +129,48 @@ def main(argv=None):
             LOG.info("Failure confirmed but the printer is no longer "
                      "printing (%s); taking no action", client.state.state)
             return
-        # Alert first, act second: if pausing fails the user still gets
-        # told, and the photo is what makes the alert actionable.
+        # ⚠️ ACT FIRST, THEN NOTIFY. The printer action is the safety
+        # boundary; a chat message is alert material. This used to send the
+        # alert first, which put a synchronous Telegram and Discord round
+        # trip -- Discord's read timeout alone is 20 s -- in front of a
+        # Pause the user had already asked for. The OctoPrint build orders
+        # it the same way for the same reason.
+        action = int(cfg.detection["action"] or 0)
+        acted, action_failed = False, None
+        if action in ACTION_NAMES:
+            try:
+                if action == 1:
+                    client.pause_print()
+                else:
+                    client.cancel_print()
+                LOG.warning("%s", ACTION_NAMES[action])
+                acted = True
+            except Exception as exc:                         # noqa: BLE001
+                action_failed = (
+                    "PiNozCam could not perform the requested printer "
+                    "action. Check the printer connection and the log.")
+                LOG.exception("Requested printer action %s failed: %s",
+                              action, exc)
+        else:
+            LOG.warning("Failure detected; action=0, so the printer was "
+                        "not touched")
+
         caption = ("Print failure detected (%.0f%% of the last %ds)"
-                   % (result.get("ratio", 0) * 100, cfg.detection["count_time"]))
+                   % (result.get("ratio", 0) * 100,
+                      cfg.detection["count_time"]))
+        if acted:
+            caption = "%s. %s" % (ACTION_NAMES[action], caption)
+        elif action_failed:
+            caption = "%s\n%s" % (action_failed, caption)
         try:
             jpeg = latest_jpeg()
             notifier.alert(caption, image=jpeg)
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not send the alert: %s", exc)
 
-        try:
-            if action == "pause":
-                client.pause_print()
-                LOG.warning("Paused the print")
-            elif action == "stop":
-                client.cancel_print()
-                LOG.warning("Cancelled the print")
-            else:
-                LOG.warning("Failure detected; on_failure=%s, so no printer "
-                            "action was taken", action)
-        except Exception as exc:                             # noqa: BLE001
-            LOG.error("Could not %s the print: %s", action, exc)
+        # Report back so the detector only latches this episode when
+        # something actually happened.
+        return acted or action == 0
 
     # Probe the inference backend now rather than at the first print, so a
     # missing binary is visible in the startup log and on the page instead

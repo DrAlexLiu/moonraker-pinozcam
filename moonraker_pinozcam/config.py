@@ -210,9 +210,13 @@ class Config(object):
             "register_webcam": self.getbool("web", "register_webcam", True),
         }
 
-    @property
-    def action(self):
-        return {"on_failure": self.get("action", "on_failure", "pause")}
+    # ⚠️ There is no `action` property, deliberately. An earlier one read
+    # `[action] on_failure`, a section nothing ever writes -- not the
+    # sample, not the settings page, not this file's own `detection`
+    # property -- so it always fell back to its "pause" default and
+    # "Alert only" paused the print anyway. The one true setting is
+    # `[detection] action`, an int 0/1/2, matching the OctoPrint build's
+    # single `action` setting.
 
     @property
     def logging(self):

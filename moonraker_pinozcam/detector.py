@@ -24,7 +24,6 @@ CAMERA_OFFLINE_AFTER = 30.0
 
 # A frame alarms at severity >= 0.5, i.e. affected area >= 2% of the
 # content rect at the default 0.04 sensitivity.
-ALARM_SEVERITY = 0.5
 
 
 class Detector(object):
@@ -273,7 +272,12 @@ class Detector(object):
             self._backend.infer(scored_image, self._score_threshold,
                                 self._sensitivity, self._cpus)
 
-        alarming = severity >= ALARM_SEVERITY
+        # ⚠️ The OctoPrint build's rule, verbatim: the AREA against the
+        # sensitivity, not the severity against a half. severity is
+        # area/sensitivity clamped to [0,1], so `severity >= 0.5` -- what
+        # this used to say -- fires at HALF the configured area and made
+        # this build twice as trigger-happy as the one it is ported from.
+        alarming = pct_area > self._sensitivity
         self.window.add(alarming)
         met, ratio = self.window.decide()
         # Normalised 0..1 so the page can draw them over an image of any
@@ -308,16 +312,34 @@ class Detector(object):
             except Exception as exc:                         # noqa: BLE001
                 self._log.debug("frame callback raised: %s", exc)
 
-        # Fire once per print. Re-alarming every frame after the threshold
-        # is crossed would spam a user who has already been told.
-        if met and not self._fired:
-            self._fired = True
+        # One episode, not one alert per frame -- but an EPISODE, which
+        # ends when the criterion stops being met. Re-arming here is what
+        # makes a second failure later in the same print reportable.
+        if not met:
+            if self._fired:
+                self._log.info(
+                    "Failure criterion cleared (%.0f%%); armed again.",
+                    ratio * 100)
+            self._fired = False
+        elif not self._fired:
             self._log.warning(
                 "FAILURE: %.0f%% of the last %ds alarmed (threshold %.0f%%)",
                 ratio * 100, self.window.count_time,
                 self.window.failure_ratio * 100)
+            # ⚠️ Latched only AFTER the handler reports success. Setting it
+            # first meant one failed pause -- or one Telegram outage -- shut
+            # detection up for the rest of the print: the flag stayed set,
+            # nothing reset it, and no later frame could ever fire again.
+            handled = False
             if self._on_failure is not None:
                 try:
-                    self._on_failure(self.last_result)
+                    handled = self._on_failure(self.last_result) is not False
                 except Exception as exc:                     # noqa: BLE001
                     self._log.error("failure handler raised: %s", exc)
+            else:
+                handled = True
+            self._fired = bool(handled)
+            if not handled:
+                self._log.warning(
+                    "The failure action did not complete; staying armed so "
+                    "the next frame can try again.")

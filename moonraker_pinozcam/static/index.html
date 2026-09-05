@@ -715,7 +715,8 @@ let recent=[];
 async function poll(){
   try{
     const d=await (await fetch("api/status")).json();
-    const detecting=!!d.detecting, alarming=d.severity>=0.5;
+    // The detector's own per-frame verdict, not a threshold guessed here.
+    const detecting=!!d.detecting, alarming=!!d.frame_alarming;
     $("c-ai").textContent=detecting?"AI running":"AI not started";
     $("c-ai").className="chip"+(detecting?(alarming?" chip-alarm":""):" chip-off");
     $("c-backend").textContent=d.backend?d.backend.split(" + ")[0]:"backend --";

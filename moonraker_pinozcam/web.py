@@ -700,7 +700,10 @@ class AnnotatedView(object):
             if last:
                 out["severity"] = last.get("severity")
                 out["model_ms"] = (last.get("elapsed") or 0) * 1000.0
-                out["alarming"] = bool(last.get("alarming"))
+                # ⚠️ NOT "alarming" -- that name already holds the window's
+                # alarming-frame COUNT, and overwriting it with a boolean
+                # made the page render "true of 137 frames alarming".
+                out["frame_alarming"] = bool(last.get("alarming"))
             if detector.backend_name:
                 out["backend"] = detector.backend_name
         return out
