@@ -7,6 +7,7 @@ inference code depends on it.
 """
 
 import argparse
+import io
 import logging
 import logging.handlers
 import os
@@ -17,6 +18,7 @@ import threading
 from .config import Config, ConfigError
 from .detector import Detector
 from .moonraker import MoonrakerClient
+from .notify import Notifier
 
 LOG = logging.getLogger("pinozcam")
 
@@ -71,6 +73,26 @@ def main(argv=None):
 
     action = (cfg.action["on_failure"] or "pause").lower()
 
+    def latest_jpeg():
+        """A fresh frame for /check, or None if detection is not running."""
+        d = detector_ref[0]
+        return d.last_jpeg if d is not None else None
+
+    def status_line():
+        st = client.state
+        d = detector_ref[0]
+        if d is None or not d.running:
+            return "Not detecting. Printer: %s" % st.state
+        w = d.window.stats
+        return ("Detecting. Printer: %s | window %d frames, %d alarming "
+                "(%.0f%%)%s" % (st.state, w["window_frames"], w["alarming"],
+                                w["ratio"] * 100,
+                                "" if w["armed"] else " | warming up"))
+
+    detector_ref = [None]
+    notifier = Notifier(cfg, client, LOG,
+                        snapshot=latest_jpeg, status=status_line)
+
     def on_failure(result):
         """Act once a failure is confirmed."""
         # Re-check state rather than trusting the detector's view: the print
@@ -80,6 +102,17 @@ def main(argv=None):
             LOG.info("Failure confirmed but the printer is no longer "
                      "printing (%s); taking no action", client.state.state)
             return
+        # Alert first, act second: if pausing fails the user still gets
+        # told, and the photo is what makes the alert actionable.
+        caption = ("Print failure detected (%.0f%% of the last %ds)"
+                   % (result.get("ratio", 0) * 100, cfg.detection["count_time"]))
+        try:
+            jpeg = latest_jpeg()
+            notifier.alert(caption,
+                           image=io.BytesIO(jpeg) if jpeg else None)
+        except Exception as exc:                             # noqa: BLE001
+            LOG.error("Could not send the alert: %s", exc)
+
         try:
             if action == "pause":
                 client.pause_print()
@@ -94,6 +127,7 @@ def main(argv=None):
             LOG.error("Could not %s the print: %s", action, exc)
 
     detector = Detector(cfg, client, LOG, on_failure=on_failure)
+    detector_ref[0] = detector
 
     def on_state_change(state):
         """Start and stop detecting with the print.
@@ -105,6 +139,9 @@ def main(argv=None):
         LOG.info("printer: %s", state)
         if state.is_printing and not detector.running:
             LOG.info("Print started -- beginning detection")
+            # Invalidate confirmations from the previous job: a button
+            # pressed now must not act on the print that just started.
+            notifier.new_print()
             detector.start()
         elif not state.is_printing and detector.running:
             LOG.info("Print no longer active (%s) -- stopping detection",
@@ -122,6 +159,7 @@ def main(argv=None):
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    notifier.start()
     client.start()
     if client.wait_until_connected(timeout=30.0):
         try:
@@ -147,6 +185,7 @@ def main(argv=None):
         pass
 
     detector.stop()
+    notifier.stop()
     client.stop()
     LOG.info("stopped")
     return 0

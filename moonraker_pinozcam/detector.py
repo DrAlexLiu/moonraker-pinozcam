@@ -53,6 +53,10 @@ class Detector(object):
         self._backend = None
         self._fired = False                # one action per print, not per frame
         self.last_result = None
+        # Kept so a /check command can answer with a real photo rather than
+        # fetching its own, which would race the detection loop for the
+        # camera and cost an extra second.
+        self.last_jpeg = None
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -171,6 +175,7 @@ class Detector(object):
         from io import BytesIO
         from PIL import Image
 
+        self.last_jpeg = frame.jpeg_bytes
         image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
         scores, boxes, labels, severity, pct_area, elapsed = \
             self._backend.infer(image, self._score_threshold,

@@ -2,4 +2,10 @@
 # 512 MB of RAM, alongside Klipper, Moonraker and a camera streamer.
 Pillow>=9.0.0
 requests>=2.25.0
+
+# Discord's Gateway. Also used by the Moonraker client's WebSocket.
 websocket-client>=1.2.0
+
+# Telegram. The bot modules are shared verbatim with the OctoPrint build,
+# which declares the same library, so both stay on one implementation.
+pyTelegramBotAPI>=4.0.0

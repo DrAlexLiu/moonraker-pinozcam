@@ -56,6 +56,24 @@ class Config(object):
             return fallback
         return str(v).strip().lower() in ("1", "true", "yes", "on")
 
+    def get_section(self, section):
+        """Return one section as a dict, with values typed by name.
+
+        Bot credentials are read this way rather than through a typed
+        property because the two bots take different key names and a
+        missing section must read as "not configured", not as an error.
+        """
+        out = {}
+        if not self._cp.has_section(section):
+            return out
+        for key in self._cp.options(section):
+            raw = self.get(section, key)
+            if key in ("enabled",):
+                out[key] = self.getbool(section, key, False)
+            else:
+                out[key] = raw
+        return out
+
     # ---- typed views -------------------------------------------------
 
     @property
