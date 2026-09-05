@@ -472,6 +472,13 @@ This is stronger evidence than the `mcu_task_stddev` table above, which
 carried enough noise to show *lower* jitter under load. `schedstat` is a
 kernel counter of a specific thread's queueing, with no such ambiguity.
 
+⚠️ **Those numbers were measured under a worse condition than intended.**
+The daemon asks for `nice 10` (yield) but actually runs at **-19** (highest
+priority) -- a known pre-existing quirk, also seen on rk3588, not
+investigated here. It makes the result stronger rather than weaker: even
+with the detector preempting everything, Klipper's serial threads waited
+0.5 ms out of 15 s.
+
 ⚠️ Still not a substitute for a real board. It shows the detector does not
 push the serial threads aside; it says nothing about whether a Buddy board's
 USB controller drops bytes under that particular delay. ⚠️ And it was

@@ -15,6 +15,7 @@ import sys
 import threading
 
 from .config import Config, ConfigError
+from .detector import Detector
 from .moonraker import MoonrakerClient
 
 LOG = logging.getLogger("pinozcam")
@@ -63,14 +64,54 @@ def main(argv=None):
     LOG.info("PiNozCam for Moonraker starting (config: %s)", cfg.path)
 
     stopping = threading.Event()
-
-    def on_state_change(state):
-        LOG.info("printer: %s", state)
-
     mr_cfg = cfg.moonraker
     client = MoonrakerClient(
         host=mr_cfg["host"], port=mr_cfg["port"], api_key=mr_cfg["api_key"],
-        logger=LOG, on_state_change=on_state_change)
+        logger=LOG)
+
+    action = (cfg.action["on_failure"] or "pause").lower()
+
+    def on_failure(result):
+        """Act once a failure is confirmed."""
+        # Re-check state rather than trusting the detector's view: the print
+        # may have ended between the last frame and this call, and pausing a
+        # finished print would confuse the user more than saying nothing.
+        if not client.state.is_printing:
+            LOG.info("Failure confirmed but the printer is no longer "
+                     "printing (%s); taking no action", client.state.state)
+            return
+        try:
+            if action == "pause":
+                client.pause_print()
+                LOG.warning("Paused the print")
+            elif action == "stop":
+                client.cancel_print()
+                LOG.warning("Cancelled the print")
+            else:
+                LOG.warning("Failure detected; on_failure=%s, so no printer "
+                            "action was taken", action)
+        except Exception as exc:                             # noqa: BLE001
+            LOG.error("Could not %s the print: %s", action, exc)
+
+    detector = Detector(cfg, client, LOG, on_failure=on_failure)
+
+    def on_state_change(state):
+        """Start and stop detecting with the print.
+
+        Detection is tied to the job, not to the service: there is nothing
+        to detect on an idle printer, and the camera and daemon should not
+        be held open between prints.
+        """
+        LOG.info("printer: %s", state)
+        if state.is_printing and not detector.running:
+            LOG.info("Print started -- beginning detection")
+            detector.start()
+        elif not state.is_printing and detector.running:
+            LOG.info("Print no longer active (%s) -- stopping detection",
+                     state.state)
+            detector.stop()
+
+    client._on_state_change = on_state_change
 
     def shutdown(signum, _frame):
         # Log the signal: an unexplained exit in a journal is hard to chase.
@@ -95,10 +136,17 @@ def main(argv=None):
         LOG.warning("Moonraker not reachable yet at %s -- still retrying",
                     client.http_base)
 
+    # The printer may already be printing when this service starts, e.g.
+    # after an update restart mid-job.
+    if client.state.is_printing:
+        LOG.info("A print is already in progress -- beginning detection")
+        detector.start()
+
     LOG.info("running; waiting for print activity")
     while not stopping.wait(1.0):
         pass
 
+    detector.stop()
     client.stop()
     LOG.info("stopped")
     return 0
