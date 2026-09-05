@@ -430,3 +430,51 @@ All three passed as plausible output before being caught:
 took effect**, not merely that its numbers look reasonable. This script now
 reads back `Cpus_allowed_list` from `/proc/<pid>/status` and requires a
 non-zero inference counter before it will report anything.
+
+### Can a virtual USB port stand in for the real one? Partly — measured
+
+The host MCU already **is** a virtual serial port: `/tmp/klipper_host_mcu`
+is a symlink to `/dev/pts/1`, and klippy holds it as a normal tty fd. So
+Klipper's serial stack — tty reads and writes, CRC, sequence tracking,
+retransmit logic — is exercised for real. What a PTY cannot reproduce is the
+**physical** failure mode:
+
+```
+host CPU busy -> USB interrupt handling delayed -> CDC-ACM driver's
+receive buffer overruns -> bytes lost -> CRC fails -> retransmit
+     ^                                    ^
+  PTY has this                    PTY does not have this
+```
+
+A PTY's buffer lives in kernel memory; when it fills, the writer blocks
+rather than dropping. So `retransmit: 0` on a host MCU is a property of the
+transport, not evidence about a real board. Injecting artificial loss would
+also answer the wrong question — how Klipper *copes* with loss, not whether
+the detector *causes* it.
+
+**But the first link of that chain is shared, and it can be measured.**
+`/proc/<pid>/task/<tid>/schedstat` field 2 is the nanoseconds a thread spent
+runnable-but-waiting — exactly the delay that would postpone USB interrupt
+handling. Over 15 s per configuration:
+
+| load | `serialhdl mcu` waited | `serialq mcu` waited |
+|---|---:|---:|
+| idle | 0.0 ms | 0.1 ms |
+| **NPU** | **0.0 ms** | **0.0 ms** |
+| CPU 3 cores | 0.3 ms | 0.2 ms |
+| **CPU 4 cores (saturated)** | **0.5 ms (0.004%)** | 0.4 ms |
+
+**Saturated, Klipper's serial threads are kept off the CPU for 0.5 ms out of
+15 s.** They get to run 99.996% of the time they want to. On NPU the figure
+is indistinguishable from idle.
+
+This is stronger evidence than the `mcu_task_stddev` table above, which
+carried enough noise to show *lower* jitter under load. `schedstat` is a
+kernel counter of a specific thread's queueing, with no such ambiguity.
+
+⚠️ Still not a substitute for a real board. It shows the detector does not
+push the serial threads aside; it says nothing about whether a Buddy board's
+USB controller drops bytes under that particular delay. ⚠️ And it was
+measured **while not printing** — klippy's motion planning is idle, so the
+contention picture during a real job differs. Re-run `sched_delay.py`
+against the Prusa Mini during an actual print.
