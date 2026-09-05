@@ -330,3 +330,103 @@ nearly nothing, since 640x480 needs almost no scaling to reach 640x384.
 **Not measured, and it is unknown whether feeding the model a 640x480
 source changes accuracy** -- the letterbox geometry differs from 1080p's.
 Revisit after the core loop is finished.
+
+---
+
+## 11. Does the detector disturb Klipper? Measured 2026-09-05 — no
+
+The OctoPrint plugin ships a conservative "25% of cores" default to protect
+gcode streaming (issue #11: starved streaming leaves marks on the print).
+**That default exists because of an assumption Klipper does not share.**
+
+### Why Klipper is structurally safer
+
+`klipper/klippy/toolhead.py`:
+
+```python
+BUFFER_TIME_HIGH  = 1.0      # seconds
+BUFFER_TIME_START = 0.250
+```
+
+Klipper computes a step schedule on the host and pushes **about a second of
+it** into the MCU ahead of time; the MCU then executes from that queue.
+OctoPrint+Marlin streams gcode line by line in real time, so a 10 ms write
+delay is 10 ms of extra nozzle dwell and a visible artifact. Klipper absorbs
+host stalls of hundreds of milliseconds without the MCU noticing.
+
+⚠️ **The buffer protects motion already computed, not the computing of it.**
+klippy must keep refilling that queue, and its motion planning lives in the
+main Python thread (GIL-bound; `serialq`/`serialhdl` are light C helpers).
+Starve klippy of CPU *continuously* and the queue drains to
+`Timer too close`, which **aborts the print** -- not a soft degradation.
+So "there is a 1 s buffer" is not a licence to occupy every core forever.
+
+### Measured, on a CB2 with a real 1080p camera
+
+Metric is Klipper's own `mcu.last_stats`, sampled every 0.5 s for 20 s per
+configuration, with a continuous inference load running:
+
+| config | stddev median | max | retransmit | affinity (verified) | inferences/s |
+|---|---:|---:|---:|---|---:|
+| idle baseline | 22.0 us | 37.0 | 0 | — | — |
+| **NPU** | **16.0 us** | 25.0 | 0 | 0-3 | **3.00** |
+| CPU 1 core | 11.0 us | 13.0 | 0 | 0 | 0.35 |
+| CPU 2 cores | 12.0 us | 13.0 | 0 | 0-1 | 0.61 |
+| CPU 3 cores | 17.0 us | 18.0 | 0 | 0-2 | 0.65 |
+| CPU 4 cores | 16.0 us | 24.0 | 0 | 0-3 | 0.70 |
+
+**Every configuration sits at or below the idle baseline.** Some loaded runs
+even measure *lower* jitter than idle, which is the giveaway: **22 us is
+measurement noise, not signal**. Against a 1 s buffer -- 1,000,000 us --
+these numbers are four orders of magnitude away from mattering.
+
+**→ On NPU, use every core.** The heavy work is on the NPU; the CPU only
+fetches and scales, and yields readily.
+
+**→ On CPU, use N-1 anyway, because it costs almost nothing:**
+
+```
+1 core 0.35  →  2 cores 0.61 (+74%)  →  3 cores 0.65 (+7%)  →  4 cores 0.70 (+8%)
+```
+
+Doubling from 2 to 4 cores buys 15%. That is the A53/A55 signature recorded
+elsewhere in this project: in-order cores are **memory-latency bound**, so
+extra cores mostly wait on memory together. Giving the 4th core back to
+klippy costs 7% throughput and is worth it.
+
+⚠️ **CPU-only is perfectly usable, contrary to an earlier claim in this
+session.** 0.70/s means a frame every 1.4 s; print monitoring glances every
+few seconds. This project ships boards at 7.7 s/frame (Pi 3B+) and calls
+that adequate.
+
+### ⚠️ What this measurement CANNOT tell you
+
+The board runs a **host MCU** (`serial: /tmp/klipper_host_mcu`, a unix
+socket). **There is no physical serial link**, so the very thing that would
+drop packets under host stall does not exist here, and `retransmit: 0` is a
+tautology rather than a result. **Re-run this against a real MCU** (the
+planned Prusa Mini Buddy board over USB serial) before trusting it for a
+machine that actually moves.
+
+### ⚠️ Three ways this measurement silently produced fake data first
+
+All three passed as plausible output before being caught:
+
+1. **`logger=None`** — `NozcamBackend` calls `self._logger.error()`, so every
+   load thread died instantly. The jitter table looked perfectly normal and
+   would have "proven" the detector has zero impact. Caught only because the
+   script also printed inferences/second (0.0).
+2. **`cpus="0,1"` as a string** — the daemon builds argv with
+   `",".join(str(c) for c in sorted(cpus))`, so a *string* is iterated
+   character by character into `,,0,1`. The daemon logged one WARNING and
+   **carried on using all four cores**, making every "core count" row
+   identical without saying so.
+3. **The guard itself** — the load counter was written only when the thread
+   *returned*, which it never did during measurement, so the
+   "is the load alive?" check always saw zero. This one failed safely
+   (reported "void") rather than inventing numbers.
+
+**→ A performance test must verify that its experimental condition actually
+took effect**, not merely that its numbers look reasonable. This script now
+reads back `Cpus_allowed_list` from `/proc/<pid>/status` and requires a
+non-zero inference counter before it will report anything.
