@@ -27,8 +27,17 @@ failure_ratio = 0.30
 count_time = 300
 # Skip the first N seconds of a print (bed adhesion looks odd early on).
 start_delay = 60
-# Percentage of performance cores the detector may use: 50, 75 or 100.
-cpu_percent = 50
+# Percentage of performance cores the detector may use: 25, 50, 75 or 100.
+#
+# 75 leaves one core for Klipper and the system, and that costs very little:
+# on these in-order A53/A55 hosts extra cores buy far less than their count
+# suggests -- measured 2 to 4 cores is +15% on an A55 (RK3566) and +8% on an
+# A53 (Pi 3B+). They are memory-latency bound, so more cores mostly wait on
+# memory together.
+#
+# Raising this to 100 is safe on an NPU board, where the CPU only fetches
+# and scales frames. On CPU-only boards the last core is worth keeping free.
+cpu_percent = 75
 
 [web]
 # Serves the annotated frame (detection boxes drawn on the camera image).

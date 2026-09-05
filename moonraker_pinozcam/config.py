@@ -103,7 +103,7 @@ class Config(object):
             "failure_ratio": self.getfloat("detection", "failure_ratio", 0.30),
             "count_time": self.getint("detection", "count_time", 300),
             "start_delay": self.getint("detection", "start_delay", 60),
-            "cpu_percent": self.getint("detection", "cpu_percent", 50),
+            "cpu_percent": self.getint("detection", "cpu_percent", 75),
         }
 
     @property

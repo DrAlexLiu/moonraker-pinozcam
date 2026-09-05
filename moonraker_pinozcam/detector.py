@@ -10,7 +10,7 @@ what gcode streaming also needs.
 import threading
 import time
 
-from . import camera, framesource, nozcam_backend
+from . import camera, cpu_affinity, framesource, nozcam_backend
 from .window import FailureWindow
 
 # One tick of the loop. It is independent of the frame source's own rate: a source may produce
@@ -43,6 +43,7 @@ class Detector(object):
         self._sensitivity = d["sensitivity"]
         self._start_delay = d["start_delay"]
         self._cpu_percent = d["cpu_percent"]
+        self._cpus = None          # resolved once, at setup
 
         self.window = FailureWindow(
             count_time=d["count_time"], failure_ratio=d["failure_ratio"])
@@ -97,6 +98,27 @@ class Detector(object):
             plugin_dir=None, logger=self._log, backend="auto")
         self._log.info("Inference backend ready: %s",
                        self._backend.describe())
+
+        # Which cores the daemon may use. Resolved from the live topology
+        # rather than from a core count, because a heterogeneous board's
+        # LITTLE cores are not interchangeable with its big ones.
+        #
+        # Extra cores buy very little on the in-order A53/A55 hosts this
+        # runs on -- measured 2->4 cores is +15% on an A55 and +8% on an
+        # A53 -- so leaving one for Klipper costs almost nothing.
+        try:
+            share = max(0.25, min(1.0, self._cpu_percent / 100.0))
+            topology = cpu_affinity.detect_cpu_topology(
+                cpu_affinity.read_cpu_topology())
+            selection = cpu_affinity.select_ai_cpus(share, topology)
+            self._cpus = selection.cpus
+            self._log.info("Detector CPUs: %s", selection.description)
+        except Exception as exc:                             # noqa: BLE001
+            # Not fatal: an unknown topology means "leave affinity alone",
+            # which is what the daemon does with an empty list.
+            self._log.warning("Could not select CPUs (%s); leaving "
+                              "affinity unchanged", exc)
+            self._cpus = None
 
     def _teardown(self):
         for obj, what in ((self._source, "camera"), (self._backend, "backend")):
@@ -179,7 +201,7 @@ class Detector(object):
         image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
         scores, boxes, labels, severity, pct_area, elapsed = \
             self._backend.infer(image, self._score_threshold,
-                                self._sensitivity)
+                                self._sensitivity, self._cpus)
 
         alarming = severity >= ALARM_SEVERITY
         self.window.add(alarming)
