@@ -17,27 +17,35 @@ snapshot_url = http://127.0.0.1:8080/?action=snapshot
 # flip_v = false
 
 [detection]
-# Confidence a box needs before it counts. Higher = fewer, surer alarms.
+# These defaults match the OctoPrint build exactly, so a user moving a
+# printer between the two gets the same behaviour rather than having to
+# re-tune. Do not change one without changing the other.
+
+# Confidence a detection needs before it counts toward severity.
 score_threshold = 0.87
-# Area sensitivity: severity = affected_area / sensitivity, clamped to [0,1].
+
+# Area sensitivity: severity = affected_area / this, clamped to [0,1].
+# A frame "alarms" at severity >= 0.5, i.e. 2% of the frame at 0.04.
 sensitivity = 0.04
+
 # Fraction of frames in the window that must alarm before acting.
-failure_ratio = 0.30
+failure_ratio = 0.05
+
 # Sliding window length, seconds.
-count_time = 300
-# Skip the first N seconds of a print (bed adhesion looks odd early on).
-start_delay = 60
-# Percentage of performance cores the detector may use: 25, 50, 75 or 100.
+count_time = 120
+
+# Seconds to skip at the start of a print. 0 means detect immediately.
+start_delay = 0
+
+# Share of the performance cores the detector may use: 0.25, 0.5, 0.75, 1.0.
+# Same scale and same default as the OctoPrint build's CPU Speed Control.
 #
-# 75 leaves one core for Klipper and the system, and that costs very little:
-# on these in-order A53/A55 hosts extra cores buy far less than their count
-# suggests -- measured 2 to 4 cores is +15% on an A55 (RK3566) and +8% on an
-# A53 (Pi 3B+). They are memory-latency bound, so more cores mostly wait on
-# memory together.
-#
-# Raising this to 100 is safe on an NPU board, where the CPU only fetches
-# and scales frames. On CPU-only boards the last core is worth keeping free.
-cpu_percent = 75
+# Extra cores buy less than their count suggests on these in-order hosts:
+# measured 2 to 4 cores is +15% on an A55 (RK3566) and +8% on an A53
+# (Pi 3B+), because they are memory-latency bound and wait on memory
+# together. Raising this to 1.0 is safe on an NPU board, where the CPU only
+# fetches and scales frames.
+cpu_share = 0.5
 
 [web]
 # Serves the annotated frame (detection boxes drawn on the camera image).

@@ -100,10 +100,12 @@ class Config(object):
         return {
             "score_threshold": self.getfloat("detection", "score_threshold", 0.87),
             "sensitivity": self.getfloat("detection", "sensitivity", 0.04),
-            "failure_ratio": self.getfloat("detection", "failure_ratio", 0.30),
-            "count_time": self.getint("detection", "count_time", 300),
-            "start_delay": self.getint("detection", "start_delay", 60),
-            "cpu_percent": self.getint("detection", "cpu_percent", 75),
+            # Defaults are the OctoPrint build's, verified against its
+            # settings_schema.py rather than taken from notes.
+            "failure_ratio": self.getfloat("detection", "failure_ratio", 0.05),
+            "count_time": self.getint("detection", "count_time", 120),
+            "start_delay": self.getint("detection", "start_delay", 0),
+            "cpu_share": self.getfloat("detection", "cpu_share", 0.5),
         }
 
     @property

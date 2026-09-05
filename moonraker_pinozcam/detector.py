@@ -42,7 +42,7 @@ class Detector(object):
         self._score_threshold = d["score_threshold"]
         self._sensitivity = d["sensitivity"]
         self._start_delay = d["start_delay"]
-        self._cpu_percent = d["cpu_percent"]
+        self._cpu_share = d["cpu_share"]
         self._cpus = None          # resolved once, at setup
 
         self.window = FailureWindow(
@@ -107,7 +107,7 @@ class Detector(object):
         # runs on -- measured 2->4 cores is +15% on an A55 and +8% on an
         # A53 -- so leaving one for Klipper costs almost nothing.
         try:
-            share = max(0.25, min(1.0, self._cpu_percent / 100.0))
+            share = max(0.01, min(1.0, self._cpu_share))
             topology = cpu_affinity.detect_cpu_topology(
                 cpu_affinity.read_cpu_topology())
             selection = cpu_affinity.select_ai_cpus(share, topology)
