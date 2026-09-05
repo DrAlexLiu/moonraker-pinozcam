@@ -98,6 +98,13 @@ fi
 "${VENV_DIR}/bin/pip" install -q -r "${PROJECT_DIR}/requirements.txt"
 ok "dependencies installed"
 
+# The runtime package carries the runner binaries and models. Which one is
+# right depends on the hardware, and the NPU variants are not on PyPI --
+# they install from a GitHub Release asset.
+say "4b/7 Inference runtime"
+"${VENV_DIR}/bin/python" "${PROJECT_DIR}/scripts/install_runtime.py" \
+    "${VENV_DIR}/bin/pip" || warn "runtime not installed; detection will not run"
+
 # --------------------------------------------------------------------------
 say "5/7  Configuration"
 if [ -f "${PINOZCAM_CONF}" ]; then
