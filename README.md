@@ -1,5 +1,10 @@
 # PiNozCam for Moonraker
 
+<p align="center">
+  <img src="assets/images/failure_detection1.jpg" alt="PiNozCam detecting a print failure" width="44%">
+  <img src="assets/images/failure_detection_side.jpeg" alt="The same failure from an overview camera" width="52%">
+</p>
+
 Local AI print-failure detection for Klipper. It watches the print through
 your existing camera, and when the print starts to fail it tells you --
 optionally pausing or stopping the printer.
@@ -110,6 +115,10 @@ frame when a failure is confirmed, with buttons on the message:
 | **Stop** | cancels the print, after a confirmation |
 
 Typed commands work as well: `/hi` on Telegram, `!check` on Discord.
+
+| Telegram | Discord |
+|---|---|
+| <img src="assets/images/telegram_remote_control.jpg" alt="Telegram alert with control buttons" width="330"> | <img src="assets/images/discord_notification.jpg" alt="Discord alert with control buttons" width="330"> |
 
 Pause and Stop ask before acting, and the confirmation is single-use,
 expires, and is refused if the print ended while it was waiting.
