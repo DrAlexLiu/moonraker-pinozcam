@@ -364,6 +364,16 @@ class Detector(object):
         # area/sensitivity clamped to [0,1], so `severity >= 0.5` -- what
         # this used to say -- fires at HALF the configured area and made
         # this build twice as trigger-happy as the one it is ported from.
+        # ⚠️ Inference takes hundreds of milliseconds, and a print can end
+        # or the service can shut down inside that window. Judge the frame,
+        # but do not let a result that arrived after the run was stopped
+        # touch the printer -- the OctoPrint build checks the same thing at
+        # the same point.
+        if self._stop.is_set():
+            self._log.info("Run stopped while this frame was being judged; "
+                           "discarding it.")
+            return
+
         alarming = pct_area > self._sensitivity
         self.window.add(alarming)
         met, ratio = self.window.decide()

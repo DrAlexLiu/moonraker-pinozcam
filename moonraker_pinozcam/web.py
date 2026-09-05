@@ -186,6 +186,32 @@ class FrameHolder(object):
         return self._live()
 
 
+def _redact_userinfo(url):
+    """Replace a URL's password with asterisks, keeping it recognisable.
+
+    ⚠️ Parsed, not string-matched. A first attempt took the LAST "@" in
+    the string, which for `http://a:b@h/p?x=y@z` is the one in the query
+    -- so it decided there was no userinfo and returned the password in
+    full. The authority is what "@" has to be looked for in, and urlsplit
+    is what knows where the authority ends.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+    if not url or "@" not in url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if not parts.netloc or "@" not in parts.netloc:
+        return url
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    user, colon, _password = userinfo.partition(":")
+    if not colon:
+        return url                      # a username alone is not a secret
+    return urlunsplit(parts._replace(
+        netloc="%s:***@%s" % (user, hostport)))
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "PiNozCam"
@@ -226,6 +252,19 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        # ⚠️ Not authentication -- this server deliberately has none, and
+        # the README says so. This only closes the drive-by case: a page on
+        # some other site cannot make a visitor's browser POST settings
+        # here, because the browser attaches an Origin the browser itself
+        # sets and cannot be forged by script. A request with no Origin at
+        # all (curl, a script, Mainsail's own fetch) is allowed through, as
+        # it always was.
+        origin = self.headers.get("Origin")
+        if origin:
+            host = self.headers.get("Host") or ""
+            if origin.split("//", 1)[-1] != host:
+                self.log_error("cross-origin POST from %s refused", origin)
+                return self._json({"error": "cross-origin request"}, 403)
         owner = self.server.owner
         payload = self._read_json()
         if payload is None:
@@ -387,6 +426,16 @@ class AnnotatedView(object):
         "snapshot_url": (str, 0, 0),
     }
 
+    # Schemes this API will accept for a camera URL.
+    #
+    # ⚠️ `file://` is deliberately NOT here, although the config file and
+    # the frame source both support it. This endpoint has no login and
+    # binds 0.0.0.0, so accepting it would let anyone on the network point
+    # the camera at any file the service can read and then fetch it from
+    # /snapshot. It stays available by editing the config file, which is
+    # protected by that file's ownership.
+    CAMERA_URL_SCHEMES = ("http://", "https://")
+
     # Written to [notification].
     EDITABLE_NOTIFY = {
         "max_notification": (int, 0, 60000),
@@ -499,7 +548,13 @@ class AnnotatedView(object):
             out["frame_sample_interval"] = int(
                 round(out["frame_sample_interval"] * 1000))
         camera = self._config.camera
-        out["snapshot_url"] = camera.get("snapshot_url") or ""
+        # ⚠️ Userinfo stripped. The OctoPrint build marks this setting
+        # secret with the note "an IP camera URL routinely carries
+        # user:pass@", and this server answers anyone on the network, so
+        # returning it verbatim handed out a camera password. The host and
+        # path stay visible, which is what makes the field usable; posting
+        # the redacted form back leaves the stored URL alone.
+        out["snapshot_url"] = _redact_userinfo(camera.get("snapshot_url") or "")
         out["mask_image_data"] = camera.get("mask_image_data") or ""
         notification = self._config.notification
         for key in self.EDITABLE_NOTIFY:
@@ -562,6 +617,17 @@ class AnnotatedView(object):
                 if field not in (payload or {}):
                     continue
                 value = payload[field]
+                if key == "snapshot_url":
+                    text = str(value).strip()
+                    if text and not text.startswith(
+                            self.CAMERA_URL_SCHEMES):
+                        raise ValueError(
+                            "snapshot_url must start with http:// or "
+                            "https:// -- other schemes can only be set by "
+                            "editing the config file")
+                    if text == _redact_userinfo(
+                            self._config.camera.get("snapshot_url") or ""):
+                        continue          # unchanged; keep the credentials
                 # The mask is what the page was given in place of a stored
                 # secret; posting it back means "unchanged".
                 if key in self.SECRETS and value == self.SECRET_MASK:

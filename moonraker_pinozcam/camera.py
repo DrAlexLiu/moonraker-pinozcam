@@ -224,6 +224,21 @@ def build_frame_source(source, logger=None, identity="pinozcam"):
     Same selection the OctoPrint build's CameraSourceFactory makes.
     """
     from . import framesource
+    # ⚠️ Prefer the STREAM when the camera offers one. A snapshot source
+    # re-opens an HTTP request per frame; an MJPEG stream is pushed, so it
+    # costs one connection and delivers frames as fast as the camera makes
+    # them. Moonraker's webcam entries normally carry both, and this used
+    # to start from snapshot_url unconditionally, so the common
+    # crowsnest setup always took the slower path.
+    stream = getattr(source, "stream_url", "") or ""
+    if stream and stream != source.snapshot_url and not \
+            is_hls_or_webrtc_stream_url(stream):
+        if _probe(stream) == "multipart/x-mixed-replace":
+            spec = framesource.SourceSpec("mjpeg", identity, stream, None)
+            if logger:
+                logger.info("Camera source: MJPEG stream (pushed)")
+            return framesource.MjpegFrameSource(spec, logger=logger)
+
     url = source.snapshot_url or ""
     if url.startswith("file://"):
         spec = framesource.SourceSpec("file", identity, url, None)
