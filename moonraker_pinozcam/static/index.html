@@ -613,11 +613,20 @@ $("maskimg").addEventListener("load",redrawEditor);
 async function maybeWelcome(){
   if(localStorage.getItem("pinozcam-welcomed"))return;
   try{
-    const s=await (await fetch("api/status")).json();
+    let s=await (await fetch("api/status")).json();
+    // null means nothing has been fetched yet, which is the normal state
+    // moments after a restart. Ask for a frame -- that is what resolves
+    // the camera -- rather than reporting "no camera" for a camera that
+    // simply has not been tried.
+    if(s.camera_ok===null||s.camera_ok===undefined){
+      try{ await fetch("snapshot?"+Date.now()); }catch(e){}
+      s=await (await fetch("api/status")).json();
+    }
     $("w-cam").innerHTML = s.camera_ok
-      ? '<span style="color:var(--ok)">A camera is already configured. PiNozCam will use it.</span>'
-      : 'No camera answered yet. PiNozCam uses whatever Moonraker is set up '
-        + 'to use — add one in Mainsail, or set a URL under Camera in the settings.';
+      ? '<span style="color:var(--ok)">A camera is answering. PiNozCam will use it.</span>'
+      : 'No camera answered. PiNozCam uses whatever Moonraker is set up to '
+        + 'use — add one in Mainsail, or set a URL under Camera in the '
+        + 'settings. You can finish this and come back to it.';
   }catch(e){ $("w-cam").textContent="Could not reach the service."; }
   $("w-levelname").textContent=LEVEL_NAMES[3];
   open("d-welcome");
