@@ -45,6 +45,9 @@ class Detector(object):
         self._sensitivity = d["img_sensitivity"]
         self._start_delay = d["ai_start_delay"]
         self._cpu_share = d["cpu_share"]
+        # Read once here, not per frame: like ai_start_delay, forcing a
+        # backend takes effect at the next print, not mid-run.
+        self._ai_backend = d.get("ai_backend") or "auto"
         self._cpus = None          # resolved once, at setup
         self._mask = config.camera.get("mask_image_data") or ""
 
@@ -70,6 +73,7 @@ class Detector(object):
         # camera and cost an extra second.
         self.last_jpeg = None
         self.backend_name = None
+        self.camera_source = None
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -100,6 +104,9 @@ class Detector(object):
     def _setup(self):
         """Resolve the camera and start the inference backend."""
         src = camera.resolve(self._cfg.camera, self._client, logger=self._log)
+        # Kept so the page can offer a Live Camera toggle pointing at the
+        # SAME camera the detector watches -- never a different one.
+        self.camera_source = src
         spec = framesource.SourceSpec(
             "snapshot", "pinozcam", src.snapshot_url, None)
         self._source = framesource.HttpSnapshotFrameSource(
@@ -107,7 +114,7 @@ class Detector(object):
         self._source.start()
 
         self._backend = nozcam_backend.NozcamBackend(
-            plugin_dir=None, logger=self._log, backend="auto")
+            plugin_dir=None, logger=self._log, backend=self._ai_backend)
         self.backend_name = self._backend.describe()
         self._log.info("Inference backend ready: %s", self.backend_name)
 
@@ -272,10 +279,18 @@ class Detector(object):
         alarming = severity >= ALARM_SEVERITY
         self.window.add(alarming)
         met, ratio = self.window.decide()
+        # Normalised 0..1 so the page can draw them over an image of any
+        # displayed size, which is what the OctoPrint build sends too. The
+        # pixel boxes stay for the annotator, which works on the real image.
+        width, height = scored_image.size
+        boxes_norm = [[round(b[0] / width, 5), round(b[1] / height, 5),
+                       round(b[2] / width, 5), round(b[3] / height, 5)]
+                      for b in boxes] if width and height else []
         self.last_result = {
             "severity": severity, "percentage_area": pct_area,
-            "boxes": boxes, "scores": scores, "elapsed": elapsed,
-            "ratio": ratio, "alarming": alarming,
+            "boxes": boxes, "boxes_norm": boxes_norm,
+            "scores": [round(float(x), 4) for x in scores],
+            "elapsed": elapsed, "ratio": ratio, "alarming": alarming,
         }
 
         # Publish the annotated frame for the web view. Encoding costs a

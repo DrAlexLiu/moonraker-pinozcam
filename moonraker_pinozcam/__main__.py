@@ -150,8 +150,25 @@ def main(argv=None):
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not %s the print: %s", action, exc)
 
+    # Probe the inference backend now rather than at the first print, so a
+    # missing binary is visible in the startup log and on the page instead
+    # of minutes into a job. The OctoPrint build does the same. Constructing
+    # one starts no process; preflight only checks the files.
+    backend_info = {"name": None, "error": None}
+    try:
+        from .nozcam_backend import NozcamBackend, BackendUnavailable
+        probe = NozcamBackend(plugin_dir=None, logger=LOG,
+                              backend=cfg.detection.get("ai_backend")
+                              or "auto")
+        probe.preflight()
+        backend_info["name"] = probe.describe()
+        LOG.info("Inference backend ready: %s", backend_info["name"])
+    except Exception as exc:                                 # noqa: BLE001
+        backend_info["error"] = "Inference backend unavailable: %s" % exc
+        LOG.error("%s", backend_info["error"])
+
     view = AnnotatedView(cfg, client, LOG, detector_ref=detector_ref,
-                         notifier=notifier)
+                         notifier=notifier, backend_info=backend_info)
     detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view,
                         on_notice=lambda text: notifier.alert(
                             text, with_buttons=True))

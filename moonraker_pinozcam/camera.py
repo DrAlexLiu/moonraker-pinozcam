@@ -145,6 +145,22 @@ def resolve(config_camera, client, logger=None):
         "or set snapshot_url in the [camera] section of the config file.")
 
 
+def is_hls_or_webrtc_stream_url(url):
+    """True if `url` is HLS or WebRTC.
+
+    Neither is something an <img> tag can read, so a Live Camera toggle
+    pointing at one would render a broken image. Parsed, not
+    string-matched: a bare endswith(".m3u8") misses a query-stringed URL
+    like `/stream.m3u8?token=...`, and a bare startswith("webrtc") would
+    match a path that merely began with those letters. Same rule, same
+    reasoning, as the OctoPrint build's check of the same name.
+    """
+    from urllib.parse import urlparse
+    parts = urlparse(url or "")
+    return (parts.scheme.lower().startswith("webrtc")
+            or parts.path.lower().endswith(".m3u8"))
+
+
 def _absolutise(url, client):
     """Turn Moonraker's relative webcam URLs into fetchable ones."""
     if not url:

@@ -11,6 +11,7 @@ no routing to speak of, and this runs beside Klipper on boards with 512 MB
 of RAM.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -21,10 +22,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BOUNDARY = "pinozcamframe"
 
-# How long a plain camera frame is reused when detection is idle. Short
-# enough to look live, long enough that an open tab does not hammer the
-# camera at the stream's frame rate.
-FALLBACK_CACHE = 0.8
+# How long a plain camera frame is reused when detection is idle. This is
+# also the idle frame rate the page sees: the stream waits the remainder of
+# it rather than sending the same picture several times, so 0.5 s means a
+# genuinely new picture twice a second. Fetching one costs ~5 ms from a
+# local ustreamer, so the bound here is politeness, not cost.
+FALLBACK_CACHE = 0.5
+
+# A publisher that has gone quiet for longer than this is treated as
+# stopped, so the stream serves the live camera instead of waiting out
+# STREAM_KEEPALIVE for an annotated frame that is not coming.
+PUBLISHER_IDLE_AFTER = 3.0
 
 # Cap the MJPEG rate independently of detection. The detector runs at
 # whatever the hardware allows; a browser tab does not need more than this,
@@ -49,6 +57,7 @@ class FrameHolder(object):
     def __init__(self, fallback=None):
         self._jpeg = None
         self._seq = 0
+        self._published_at = 0.0
         self._cv = threading.Condition()
         self._fallback = fallback      # () -> jpeg bytes or None
         self._fallback_jpeg = None
@@ -63,6 +72,7 @@ class FrameHolder(object):
         with self._cv:
             self._jpeg = jpeg_bytes
             self._seq += 1
+            self._published_at = time.monotonic()
             self._cv.notify_all()
 
     def latest(self):
@@ -102,21 +112,70 @@ class FrameHolder(object):
         return self._fallback_jpeg
 
     def wait_newer(self, last_seq, timeout):
-        """Block for a frame newer than last_seq; return (jpeg, seq)."""
+        """Block for a frame newer than last_seq; return (jpeg, seq).
+
+        ⚠️ Two ways this went wrong before, both only when NOT detecting,
+        which is most of the time a user has the page open:
+
+        * On a service that had not run a print yet, _seq is 0 and the
+          caller starts at -1, so `_seq <= last_seq` was false immediately,
+          the loop's else branch ran, and it returned the _jpeg that does
+          not exist yet -- None. The stream handler treats None as "stop",
+          so the connection closed after zero frames and the live view was
+          simply dead.
+        * Once a print HAD run, _jpeg holds its last annotated frame
+          forever, so the same path served that stale picture every two
+          seconds and never fetched the camera again. That is what "the
+          camera is slow" looked like.
+
+        A frame only counts as new when the sequence advanced AND there is
+        something to send; anything else falls through to the live camera.
+        """
         deadline = time.monotonic() + timeout
         with self._cv:
-            while self._seq <= last_seq:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    if self._jpeg is not None:
-                        return self._jpeg, self._seq
-                    break
-                self._cv.wait(remaining)
-            else:
+            if self._seq > last_seq and self._jpeg is not None:
                 return self._jpeg, self._seq
-        # Idle: no annotated frame arrived, so serve the live camera and
-        # bump nothing -- the caller keeps its sequence and comes back.
-        return self._live(), last_seq
+            # Only wait for an annotated frame while something is actually
+            # producing them. Waiting out the keepalive on every frame of
+            # an idle stream cost a full 2 s each -- 0.45 fps, which is
+            # what "the camera is slow" was.
+            if self._publishing():
+                while self._seq <= last_seq or self._jpeg is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._cv.wait(remaining)
+                else:
+                    return self._jpeg, self._seq
+        # No NEW annotated frame. Serve the live camera and keep the
+        # caller's sequence, so it asks again next tick.
+        return self._live_fresh(), last_seq
+
+    def peek(self):
+        """The annotated frame and its sequence, without any waiting."""
+        with self._cv:
+            return self._jpeg, self._seq
+
+    def publishing(self):
+        return self._publishing()
+
+    def _publishing(self):
+        """Whether a detector is currently feeding us annotated frames."""
+        return (self._published_at > 0.0
+                and time.monotonic() - self._published_at
+                < PUBLISHER_IDLE_AFTER)
+
+    def _live_fresh(self):
+        """A live frame, waiting out the cache so it is a NEW picture.
+
+        Without the wait the stream would send the same cached JPEG several
+        times a second: bytes on the wire for a picture that has not
+        changed.
+        """
+        due = self._fallback_at + FALLBACK_CACHE - time.monotonic()
+        if 0 < due < FALLBACK_CACHE:
+            time.sleep(due)
+        return self._live()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -185,7 +244,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._json(self.server.owner.read_settings())
         elif path == "/api/status":
-            self._json(self.server.owner.read_status())
+            # The Host the BROWSER used, so a camera URL built for it is
+            # one the browser can actually reach.
+            self._json(self.server.owner.read_status(
+                self.headers.get("Host") or ""))
         elif path == "/health":
             body = b"ok"
             self.send_response(200)
@@ -212,10 +274,21 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _snapshot(self):
-        jpeg, _ = self.server.frames.latest()
+        jpeg, seq = self.server.frames.latest()
         if jpeg is None:
             return self._no_frame()
+        # ETag so the page can refetch on every frame_id change without
+        # paying for a picture it already has. Mainsail and other pollers
+        # get the same benefit for free.
+        etag = '"%s"' % hashlib.md5(jpeg).hexdigest()
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.send_response(200)
+        self.send_header("ETag", etag)
         self.send_header("Content-Type", "image/jpeg")
         self.send_header("Content-Length", str(len(jpeg)))
         # Frontends poll this; a cached frame would look like a frozen camera.
@@ -346,13 +419,17 @@ class AnnotatedView(object):
     SECRETS = ("token", "bot_token")
 
     def __init__(self, config, client, logger, detector_ref=None,
-                 notifier=None):
+                 notifier=None, backend_info=None):
         self._config = config
         self._cfg = config.web
         self._client = client
         self._log = logger
         self._detector_ref = detector_ref
         self._notifier = notifier
+        # {"name": str|None, "error": str|None} from the startup probe, so
+        # the page can name the hardware before the first print.
+        self._backend_info = backend_info or {}
+        self._browser_camera = None        # (host, url) once resolved
         self.frames = FrameHolder(fallback=self._live_camera_jpeg)
         self._camera_source = None
         self._stopping = threading.Event()
@@ -502,7 +579,76 @@ class AnnotatedView(object):
         self._log.info("Mask updated from the web page (%d cells ignored)",
                        data.count("1"))
 
-    def read_status(self):
+    def stream_info(self, request_host):
+        """The camera's OWN stream, if the browser could use it. Else None.
+
+        Feeds the page's Live Camera toggle. A direct browser-to-camera
+        connection costs this service nothing, and gives the camera's real
+        frame rate instead of ours -- we add nothing to a picture we are
+        not drawing boxes on.
+
+        None whenever the stream could show something other than what the
+        detector sees, which is the same set of rules the OctoPrint build
+        applies:
+
+        * a snapshot_url is set in the config, so the detector may be
+          watching a DIFFERENT camera than the one Moonraker streams;
+        * the resolved camera has no stream URL;
+        * rotation is set -- frames are turned before inference, and doing
+          the same to a live stream in CSS needs rotated-box layout or the
+          picture overflows;
+        * the URL is HLS or WebRTC, which an <img> cannot read.
+
+        The flip flags ride along: the raw stream is untransformed, so only
+        it needs them applied in CSS.
+
+        ⚠️ The URL must also be reachable from the BROWSER. On a stock
+        Klipper host ustreamer binds 127.0.0.1 only, and the camera is
+        reached through nginx on port 80; Moonraker registers that as the
+        relative `/webcam/?action=stream`, meant to be resolved against the
+        frontend's origin. This page is on another port, so a relative URL
+        is resolved here against the host the browser used to reach us,
+        with our port dropped.
+        """
+        if self._config.camera.get("snapshot_url"):
+            return None                 # may not be the streamed camera
+        detector = self._detector_ref[0] if self._detector_ref else None
+        # The detector's camera while it runs; otherwise the one this view
+        # already resolved for its own idle fallback, so the toggle does
+        # not have to wait for a print to appear.
+        source = (getattr(detector, "camera_source", None)
+                  or self._camera_source)
+        if source is None or not source.stream_url or source.rotation:
+            return None
+        from . import camera as camera_mod
+        from urllib.parse import urlparse, urlunparse
+        url = source.stream_url
+        host = (request_host or "").split(":")[0]
+        parts = urlparse(url)
+        if parts.hostname in ("127.0.0.1", "localhost", "::1"):
+            # ⚠️ That loopback is OURS, not the user's: Moonraker registers
+            # this camera as the relative `/webcam/?action=stream`, and
+            # camera.resolve() absolutised it against the Moonraker host so
+            # THIS process could fetch it. A browser cannot. Put the host it
+            # used to reach us back in, keeping the port -- which is how a
+            # relative URL was always meant to be read. Only for a URL we
+            # built ourselves; a loopback the user typed is excluded by the
+            # snapshot_url rule above.
+            if source.origin not in ("moonraker", "nginx") or not host:
+                return None
+            netloc = host if parts.port is None else "%s:%d" % (host,
+                                                                parts.port)
+            url = urlunparse(parts._replace(netloc=netloc))
+        elif url.startswith("/"):
+            if not host:
+                return None
+            url = "http://%s%s" % (host, url)
+        if camera_mod.is_hls_or_webrtc_stream_url(url):
+            return None
+        return {"url": url, "flipH": bool(source.flip_h),
+                "flipV": bool(source.flip_v)}
+
+    def read_status(self, request_host=""):
         detector = self._detector_ref[0] if self._detector_ref else None
         state = self._client.state
         notifier = self._notifier
@@ -518,7 +664,28 @@ class AnnotatedView(object):
             "discord": bool(notifier is not None
                             and notifier.discord_bot is not None),
             "camera_ok": self._camera_reachable(),
+            # Null hides the page's Live Camera toggle.
+            "stream": self.stream_info(request_host),
         }
+        # What the live view should be showing. frame_id is a cheap change
+        # detector: the page refetches the picture only when it moves, and
+        # boxes are sent only for an "analysis" frame -- boxes from one
+        # frame must never be drawn over another. Same contract as the
+        # OctoPrint build's /status.
+        annotated, seq = self.frames.peek()
+        if annotated is not None and self.frames.publishing():
+            out["frame_kind"] = "analysis"
+            out["frame_id"] = "a%d" % seq
+        else:
+            # The camera fallback re-encodes at most once per cache
+            # window, so its id only needs to move at that cadence.
+            out["frame_kind"] = "camera"
+            out["frame_id"] = "c%d" % int(time.monotonic() / FALLBACK_CACHE)
+        # Named from the startup probe until a detector supersedes it.
+        if self._backend_info.get("name"):
+            out["backend"] = self._backend_info["name"]
+        if self._backend_info.get("error"):
+            out["error"] = self._backend_info["error"]
         if detector is not None:
             # Shown as a banner on the page. Without it a detector that
             # failed to start looked identical to one that was simply idle.
@@ -532,6 +699,10 @@ class AnnotatedView(object):
             if last:
                 out["severity"] = last.get("severity")
                 out["model_ms"] = (last.get("elapsed") or 0) * 1000.0
+                out["alarming"] = bool(last.get("alarming"))
+                if out.get("frame_kind") == "analysis":
+                    out["boxes"] = last.get("boxes_norm") or []
+                    out["scores"] = last.get("scores") or []
             if detector.backend_name:
                 out["backend"] = detector.backend_name
         return out
