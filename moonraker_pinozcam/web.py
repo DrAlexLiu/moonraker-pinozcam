@@ -373,6 +373,7 @@ class AnnotatedView(object):
         out = {
             "printer_state": state.state,
             "detecting": bool(detector and detector.running),
+            "version": __import__("moonraker_pinozcam").__version__,
         }
         if detector is not None:
             stats = detector.window.stats
