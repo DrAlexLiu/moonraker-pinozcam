@@ -168,3 +168,73 @@ def _absolutise(url, client):
     if url.startswith("http://") or url.startswith("https://"):
         return url
     return "http://%s/%s" % (client.host, url.lstrip("/"))
+
+
+def build_frame_source(source, logger=None, identity="pinozcam"):
+    """The right FrameSource for this camera's URL.
+
+    ⚠️ Do not hardcode HttpSnapshotFrameSource here. The shared framesource
+    module ships three readers and the URL decides which one is correct:
+    an endless `multipart/x-mixed-replace` stream fed to the snapshot
+    reader never returns a frame -- it just runs until that reader's own
+    size/time bound trips and raises -- and a `file://` URL is not
+    something `requests` can open at all. Both of those are documented as
+    supported camera sources, and both were broken while this function did
+    not exist.
+
+    Same selection the OctoPrint build's CameraSourceFactory makes.
+    """
+    from . import framesource
+    url = source.snapshot_url or ""
+    if url.startswith("file://"):
+        spec = framesource.SourceSpec("file", identity, url, None)
+        if logger:
+            logger.info("Camera source: static file")
+        return framesource.StaticFileFrameSource(spec, logger=logger)
+    if _probe(url) == "multipart/x-mixed-replace":
+        spec = framesource.SourceSpec("mjpeg", identity, url, None)
+        if logger:
+            logger.info("Camera source: MJPEG stream")
+        return framesource.MjpegFrameSource(spec, logger=logger)
+    spec = framesource.SourceSpec("snapshot", identity, url, None)
+    if logger:
+        logger.info("Camera source: HTTP snapshot")
+    return framesource.HttpSnapshotFrameSource(spec, logger=logger)
+
+
+def grab_jpeg(source, logger=None, timeout=8.0):
+    """One JPEG from `source`, or None. For callers with no sampler.
+
+    A throwaway reader rather than a bare `requests.get`, for the same
+    reason build_frame_source exists: a stream and a local file are not
+    fetchable that way. Started and closed inside this call, so it never
+    leaves a reader thread behind.
+    """
+    import threading
+    url = source.snapshot_url or ""
+    if not url.startswith("file://") and _probe(url) != \
+            "multipart/x-mixed-replace":
+        # The common case: one bounded GET, no thread.
+        try:
+            r = requests.get(url, timeout=(3.0, 6.0))
+            if r.status_code == 200 and r.content[:2] == b"\xff\xd8":
+                return r.content
+        except requests.RequestException:
+            pass
+        return None
+
+    reader = build_frame_source(source, logger=logger)
+    stop = threading.Event()
+    try:
+        reader.start()
+        frame = reader.wait_next(-1, stop, timeout)
+        return frame.jpeg_bytes if frame is not None else None
+    except Exception as exc:                                 # noqa: BLE001
+        if logger:
+            logger.debug("could not grab a frame: %s", exc)
+        return None
+    finally:
+        try:
+            reader.close()
+        except Exception:                                    # noqa: BLE001
+            pass

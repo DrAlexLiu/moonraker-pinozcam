@@ -177,11 +177,37 @@ line and a stall does show up in the print.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- how the pieces fit, and
-  why each of them is shaped the way it is
-- [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) -- watching the printer
-  from outside the house, and why this project does not open a tunnel for
-  you
+**Using it**
+
+- [Camera setup](docs/camera.md) -- where to point it, what PiNozCam
+  accepts, and how the live view works
+- [Detection logic and tuning](docs/detection-and-tuning.md) -- exactly how
+  it decides a print is failing, and how to change that
+- [Telegram and Discord](docs/notifications.md) -- setting up the bots and
+  what the buttons do
+- [Performance](docs/performance.md) -- how fast each board is, and how many
+  cores to give it
+
+**Hardware**
+
+- [Rockchip NPU](docs/rockchip-npu.md) -- RK3566 / RK3576 / RK3588
+- [Allwinner NPU](docs/allwinner-npu.md) -- A733 / T527
+
+**Reference**
+
+- [Architecture](docs/ARCHITECTURE.md) -- how the pieces fit, and why each
+  of them is shaped the way it is
+- [Remote access](docs/REMOTE_ACCESS.md) -- watching the printer from
+  outside the house, and why this project does not open a tunnel for you
+- [Licences](docs/licenses.md) -- what ships from where, and the LGPL
+  source offer for the statically linked daemon
+- [Audit prompt](docs/AUDIT_PROMPT.md) -- for reviewing this port against
+  the OctoPrint build it came from
+
+Most of these are ported from the OctoPrint build's own docs. The model, the
+daemon and every detection setting are shared, so the text is upstream's
+wherever it still applies; each file says at the top what was changed for
+Klipper and why.
 
 ## Credits and licence
 

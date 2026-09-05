@@ -451,10 +451,9 @@ class AnnotatedView(object):
             except Exception:                                # noqa: BLE001
                 return None
         try:
-            response = requests.get(self._camera_source.snapshot_url,
-                                    timeout=(3.0, 6.0))
-            if response.status_code == 200 and response.content[:2] == b"\xff\xd8":
-                return response.content
+            jpeg = camera_mod.grab_jpeg(self._camera_source)
+            if jpeg:
+                return jpeg
         except Exception:                                    # noqa: BLE001
             # Camera unplugged or crowsnest restarting; the page shows the
             # last frame it had rather than an error.

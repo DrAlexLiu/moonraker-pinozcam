@@ -107,10 +107,7 @@ class Detector(object):
         # Kept so the page can offer a Live Camera toggle pointing at the
         # SAME camera the detector watches -- never a different one.
         self.camera_source = src
-        spec = framesource.SourceSpec(
-            "snapshot", "pinozcam", src.snapshot_url, None)
-        self._source = framesource.HttpSnapshotFrameSource(
-            spec, logger=self._log)
+        self._source = camera.build_frame_source(src, logger=self._log)
         self._source.start()
 
         self._backend = nozcam_backend.NozcamBackend(
