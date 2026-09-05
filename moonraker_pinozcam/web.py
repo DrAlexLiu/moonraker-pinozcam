@@ -21,6 +21,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BOUNDARY = "pinozcamframe"
 
+# How long a plain camera frame is reused when detection is idle. Short
+# enough to look live, long enough that an open tab does not hammer the
+# camera at the stream's frame rate.
+FALLBACK_CACHE = 0.8
+
 # Cap the MJPEG rate independently of detection. The detector runs at
 # whatever the hardware allows; a browser tab does not need more than this,
 # and each frame served costs a JPEG encode.
@@ -33,12 +38,21 @@ STREAM_KEEPALIVE = 2.0
 
 
 class FrameHolder(object):
-    """The most recent annotated frame, shared with the detection thread."""
+    """The most recent annotated frame, shared with the detection thread.
 
-    def __init__(self):
+    When detection is not running there are no annotated frames, but the
+    page still has to show something: tuning the sensitivity and painting a
+    mask are things a user does BETWEEN prints, and an empty view then is
+    useless. So a fallback fetches the plain camera image on demand.
+    """
+
+    def __init__(self, fallback=None):
         self._jpeg = None
         self._seq = 0
         self._cv = threading.Condition()
+        self._fallback = fallback      # () -> jpeg bytes or None
+        self._fallback_jpeg = None
+        self._fallback_at = 0.0
 
     def publish(self, jpeg_bytes):
         with self._cv:
@@ -48,7 +62,37 @@ class FrameHolder(object):
 
     def latest(self):
         with self._cv:
-            return self._jpeg, self._seq
+            if self._jpeg is not None:
+                return self._jpeg, self._seq
+        return self._live(), self._seq
+
+    def _live(self):
+        """Plain camera frame, cached briefly.
+
+        Cached because /stream calls this on every tick when idle; without
+        it an open browser tab would poll the camera as fast as it can.
+        """
+        if self._fallback is None:
+            return None
+        now = time.monotonic()
+        if (self._fallback_jpeg is not None
+                and now - self._fallback_at < FALLBACK_CACHE):
+            return self._fallback_jpeg
+        try:
+            jpeg = self._fallback()
+        except Exception:                                    # noqa: BLE001
+            jpeg = None
+        if jpeg:
+            self._fallback_jpeg = jpeg
+            self._fallback_at = now
+            return self._fallback_jpeg
+        # Camera unreachable. Show NO SIGNAL rather than a blank element or
+        # a stale frame from minutes ago -- a user tuning a mask needs to
+        # know the picture is not current.
+        from .placeholder import no_signal_jpeg
+        self._fallback_jpeg = no_signal_jpeg()
+        self._fallback_at = now
+        return self._fallback_jpeg
 
     def wait_newer(self, last_seq, timeout):
         """Block for a frame newer than last_seq; return (jpeg, seq)."""
@@ -57,9 +101,15 @@ class FrameHolder(object):
             while self._seq <= last_seq:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return self._jpeg, self._seq
+                    if self._jpeg is not None:
+                        return self._jpeg, self._seq
+                    break
                 self._cv.wait(remaining)
-            return self._jpeg, self._seq
+            else:
+                return self._jpeg, self._seq
+        # Idle: no annotated frame arrived, so serve the live camera and
+        # bump nothing -- the caller keeps its sequence and comes back.
+        return self._live(), last_seq
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -238,10 +288,36 @@ class AnnotatedView(object):
         self._client = client
         self._log = logger
         self._detector_ref = detector_ref
-        self.frames = FrameHolder()
+        self.frames = FrameHolder(fallback=self._live_camera_jpeg)
+        self._camera_source = None
         self._stopping = threading.Event()
         self._server = None
         self._thread = None
+
+    def _live_camera_jpeg(self):
+        """Fetch one plain frame straight from the camera.
+
+        Resolved lazily and cached: at start() the camera may not be
+        configured yet, and resolution costs an HTTP probe.
+        """
+        from . import camera as camera_mod
+        import requests
+        if self._camera_source is None:
+            try:
+                self._camera_source = camera_mod.resolve(
+                    self._config.camera, self._client, logger=None)
+            except Exception:                                # noqa: BLE001
+                return None
+        try:
+            response = requests.get(self._camera_source.snapshot_url,
+                                    timeout=(3.0, 6.0))
+            if response.status_code == 200 and response.content[:2] == b"\xff\xd8":
+                return response.content
+        except Exception:                                    # noqa: BLE001
+            # Camera unplugged or crowsnest restarting; the page shows the
+            # last frame it had rather than an error.
+            self._camera_source = None      # re-resolve next time
+        return None
 
     @property
     def enabled(self):

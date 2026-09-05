@@ -30,8 +30,18 @@ main{display:grid;grid-template-columns:minmax(320px,1.6fr) minmax(280px,1fr);
          text-transform:uppercase;letter-spacing:.04em}
 #viewwrap{position:relative;line-height:0}
 #view{width:100%;border-radius:6px;display:block;background:#000}
-#maskcv{position:absolute;inset:0;width:100%;height:100%;border-radius:6px;
+#maskcv{position:absolute;inset:0;width:100%;height:100%;border-radius:4px;
         cursor:crosshair;touch-action:none;display:none}
+/* Entering edit mode has to LOOK different. Without this the canvas is
+   fully transparent when no mask is set, so clicking Edit mask appeared to
+   do nothing at all. */
+#viewwrap.editing #maskcv{display:block;outline:2px solid var(--alarm);
+        outline-offset:-2px}
+#viewwrap.editing::after{content:"MASK EDITING — drag to mark, drag again to erase";
+        position:absolute;left:0;right:0;top:0;padding:6px 10px;
+        background:rgba(255,82,82,.92);color:#fff;font-size:12px;
+        font-weight:600;letter-spacing:.03em;border-radius:4px 4px 0 0;
+        pointer-events:none}
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;
      padding:7px 0;border-bottom:1px solid var(--line)}
 .row:last-child{border-bottom:0}
@@ -178,7 +188,7 @@ function drawMask(){
   const ctx = cv.getContext("2d");
   ctx.clearRect(0,0,cv.width,cv.height);
   const cw = cv.width/GRID, ch = cv.height/GRID;
-  ctx.fillStyle = editing ? "rgba(255,64,64,.45)" : "rgba(0,0,0,.75)";
+  ctx.fillStyle = editing ? "rgba(255,82,82,.45)" : "rgba(0,0,0,.78)";
   for(let r=0;r<GRID;r++){
     let c=0;
     while(c<GRID){
@@ -186,6 +196,17 @@ function drawMask(){
       const s=c; while(c<GRID && maskCells[r][c]) c++;
       ctx.fillRect(s*cw, r*ch, (c-s)*cw, ch+.5);
     }
+  }
+  if(editing){
+    // A coarse grid, every 8th cell. Without it an empty canvas gives no
+    // hint that the picture is now paintable.
+    ctx.strokeStyle = "rgba(255,255,255,.13)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let i=8;i<GRID;i+=8){
+      ctx.moveTo(i*cw+.5, 0); ctx.lineTo(i*cw+.5, cv.height);
+      ctx.moveTo(0, i*ch+.5); ctx.lineTo(cv.width, i*ch+.5);
+    }
+    ctx.stroke();
   }
 }
 function cellAt(ev){
@@ -208,12 +229,12 @@ function paint(ev){
 
 $("btn-mask").onclick = () => {
   editing = !editing;
+  $("viewwrap").classList.toggle("editing", editing);
   $("maskcv").style.display = editing ? "block" : "none";
   $("btn-savemask").style.display = $("btn-clear").style.display =
       editing ? "inline-block" : "none";
   $("btn-mask").textContent = editing ? "Cancel" : "Edit mask";
-  $("maskhint").textContent = editing ?
-      " — drag to mark ignored areas, drag again to unmark" : "";
+
   $("view").src = editing ? "snapshot?"+Date.now() : "stream?"+Date.now();
   setTimeout(drawMask, 120);
 };
