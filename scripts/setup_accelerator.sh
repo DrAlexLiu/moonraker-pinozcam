@@ -80,10 +80,19 @@ else
 fi
 
 # --- The userspace library -------------------------------------------------
+# NOTE `strings x | grep -m1` looks safe and is not, under `set -o pipefail`:
+# grep exits at the first match, strings dies of SIGPIPE, and the pipeline is
+# reported as failed even though the match succeeded. A `|| echo default` on
+# the end then appends its default to the value that was already captured.
+lib_version() {
+    local out
+    out=$(strings "$1" 2>/dev/null | grep -m1 'librknnrt version') || true
+    [ -n "${out}" ] && echo "${out#librknnrt version: }" || echo "unknown version"
+}
+
 for p in /usr/lib/librknnrt.so /usr/lib/aarch64-linux-gnu/librknnrt.so; do
     if [ -e "$p" ]; then
-        V=$(strings "$p" 2>/dev/null | grep -m1 'librknnrt version' || echo "unknown version")
-        ok "librknnrt.so present (${V#librknnrt version: })"
+        ok "librknnrt.so present ($(lib_version "$p"))"
         exit 0
     fi
 done
@@ -122,11 +131,11 @@ if ! head -c4 "${TMP}/librknnrt.so" | grep -q $'\x7fELF'; then
     warn "downloaded file is not an ELF library -- refusing to install it."
     exit 0
 fi
-GOT=$(strings "${TMP}/librknnrt.so" | grep -m1 'librknnrt version' || echo "?")
+GOT=$(lib_version "${TMP}/librknnrt.so")
 
 sudo install -m 0644 -o root -g root "${TMP}/librknnrt.so" /usr/lib/librknnrt.so
 command -v ldconfig >/dev/null && sudo ldconfig || sudo /usr/sbin/ldconfig
-ok "installed /usr/lib/librknnrt.so (${GOT#librknnrt version: })"
+ok "installed /usr/lib/librknnrt.so (${GOT})"
 
 if [ -n "${DRIVER_VER}" ]; then
     info ""
