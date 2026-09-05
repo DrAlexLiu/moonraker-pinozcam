@@ -180,6 +180,8 @@ class Config(object):
             "flip_v": self.getbool("camera", "flip_v", False),
             # MASK_GRID x MASK_GRID of "0"/"1", row-major, "1" = ignore.
             "mask_image_data": self.get("camera", "mask_image_data", ""),
+            # The coordinate system that mask was painted in; see mask.py.
+            "mask_signature": self.get("camera", "mask_signature", ""),
         }
 
     @property

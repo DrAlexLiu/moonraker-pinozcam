@@ -75,13 +75,21 @@ class Detector(object):
         self._paused_by_switch = False
         self._buffer = None
         self._buffer_max_age = None
+        self._mask_fits = True
         self._last_sampled_jpeg = None
         self.last_result = None
         # The one line worth putting in front of the user when detection is
         # not working. Setup failure used to be logged and nothing else, so
         # the page showed "AI not started" with no reason and the user had
         # to find the journal to learn the backend was missing.
+        # ⚠️ Two different lifetimes, so two fields. last_error is
+        # TRANSIENT -- a frame that would not score, a camera gone quiet --
+        # and the next good frame clears it. last_warning is a STANDING
+        # condition a good frame does not resolve, such as a mask that no
+        # longer fits the camera. Sharing one field meant the mask warning
+        # was raised and then wiped by the very next successful frame.
         self.last_error = None
+        self.last_warning = None
         # Edge state for the camera watch, matching the OctoPrint build.
         self.camera_ok_at = 0.0
         self.camera_alerted = False
@@ -288,6 +296,8 @@ class Detector(object):
                 image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
                 image = camera.transform_image(image, self.camera_source,
                                                logger=self._log)
+                self._check_mask_fits(
+                    Image.open(BytesIO(frame.jpeg_bytes)).size)
                 score = (self._measure_sharpness(image)
                          if self._buffer.should_measure() else float("-inf"))
                 self._buffer.put(image, score, tick)
@@ -295,6 +305,34 @@ class Detector(object):
             except Exception as exc:                         # noqa: BLE001
                 self._log.debug("could not sample a frame: %s", exc)
             self._pace(tick)
+
+    def _check_mask_fits(self, source_size):
+        """Suspend the mask if the camera is no longer the one it was for.
+
+        Blacking out the wrong region is worse than not masking: it can
+        hide a real failure and say nothing. So a mismatch disables the
+        mask, loudly, and leaves the picture alone.
+        """
+        stored = (self._cfg.camera.get("mask_signature") or "").strip()
+        if not self._mask or not stored:
+            self._mask_fits = True
+            return
+        live = mask.signature(source_size, self.camera_source)
+        fits = (live == stored)
+        if fits == self._mask_fits:
+            return
+        self._mask_fits = fits
+        if fits:
+            self._log.info("Undetect zone applies again (%s).", live)
+            self.last_warning = None
+        else:
+            self._log.warning(
+                "Undetect zone SUSPENDED: it was painted for %s and the "
+                "camera now delivers %s. Repaint it, or restore the old "
+                "camera settings.", stored, live)
+            self.last_warning = (
+                "The undetect zone was painted for a different camera "
+                "geometry and is not being applied. Repaint it.")
 
     @staticmethod
     def _measure_sharpness(image):
@@ -434,7 +472,8 @@ class Detector(object):
         # Filtering detections afterwards would still let a masked region
         # influence the letterbox content rect and the severity fraction.
         scored_image = (mask.apply_to_image(image, self._mask)
-                        if not mask.is_empty(self._mask) else image)
+                        if self._mask_fits and not mask.is_empty(self._mask)
+                        else image)
 
         scores, boxes, labels, severity, pct_area, elapsed = \
             self._backend.infer(scored_image, self._score_threshold,

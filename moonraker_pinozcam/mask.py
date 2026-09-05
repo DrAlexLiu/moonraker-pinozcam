@@ -53,6 +53,31 @@ def is_empty(data):
     return not data or "1" not in data
 
 
+def signature(source_size, source):
+    """The coordinate system a mask was painted in.
+
+    A 128x128 grid is normalised over the frame, so a different pixel SIZE
+    with the same shape still maps correctly. What does not map is a
+    different aspect ratio or a different transform -- those move every
+    cell, and a mask applied across such a change blacks out the wrong
+    region and can hide a real failure without saying anything.
+
+    ⚠️ The aspect is the SOURCE frame's, taken BEFORE rotation swaps the
+    axes, and the rotation is recorded separately. Storing the
+    post-transform ratio would be actively harmful: turning rotation on
+    would move the ratio and the flag together, so a plain rotation would
+    look like a camera swap -- the one case that must not be treated as
+    one. Same reasoning as the OctoPrint build's _camera_signature.
+    """
+    width, height = source_size
+    aspect = round(width / float(height), 3) if height else 0.0
+    return "%.3f|%d|%d%d" % (
+        aspect,
+        int(getattr(source, "rotation", 0) or 0) % 360,
+        int(bool(getattr(source, "flip_h", False))),
+        int(bool(getattr(source, "flip_v", False))))
+
+
 def apply_to_image(image, data, grid=MASK_GRID):
     """Return a copy of `image` with masked cells painted black."""
     masked = image.convert("RGB")

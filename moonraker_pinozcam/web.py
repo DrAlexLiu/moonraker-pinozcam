@@ -510,7 +510,9 @@ class AnnotatedView(object):
         try:
             jpeg = camera_mod.grab_jpeg(self._camera_source)
             if jpeg:
-                return jpeg
+                # Same orientation the detector works in, so the page and
+                # the mask editor never see an untransformed picture.
+                return camera_mod.transform_jpeg(jpeg, self._camera_source)
         except Exception:                                    # noqa: BLE001
             # Camera unplugged or crowsnest restarting; the page shows the
             # last frame it had rather than an error.
@@ -648,9 +650,36 @@ class AnnotatedView(object):
             if side * side != len(data):
                 raise ValueError("mask length %d is not a square"
                                  % len(data))
-        self._config.write_options("camera", {"mask_image_data": data})
-        self._log.info("Mask updated from the web page (%d cells ignored)",
-                       data.count("1"))
+        # ⚠️ Recorded WITH the mask: the grid only means anything in the
+        # coordinate system it was painted in. Without this a camera swap
+        # or a rotation change silently blacked out the wrong region.
+        updates = {"mask_image_data": data}
+        signature = self._mask_signature()
+        if signature:
+            updates["mask_signature"] = signature
+        self._config.write_options("camera", updates)
+        self._log.info("Mask updated from the web page (%d cells ignored, "
+                       "signature %s)", data.count("1"), signature or "?")
+
+    def _mask_signature(self):
+        """The coordinate system the editor's picture was in, or None."""
+        from io import BytesIO
+        from . import camera as camera_mod
+        from . import mask as mask_mod
+        source = self._camera_source
+        if source is None:
+            return None
+        try:
+            from PIL import Image
+            jpeg = camera_mod.grab_jpeg(source)
+            if not jpeg:
+                return None
+            # The SOURCE size, before the transform -- see mask.signature.
+            return mask_mod.signature(
+                Image.open(BytesIO(jpeg)).size, source)
+        except Exception as exc:                             # noqa: BLE001
+            self._log.debug("could not read the mask signature: %s", exc)
+            return None
 
     def stream_info(self, request_host):
         """The camera's OWN stream, if the browser could use it. Else None.
@@ -764,8 +793,12 @@ class AnnotatedView(object):
         if detector is not None:
             # Shown as a banner on the page. Without it a detector that
             # failed to start looked identical to one that was simply idle.
-            if detector.last_error:
-                out["error"] = detector.last_error
+            # A transient failure wins the banner; a standing warning
+            # holds it when there is no failure to report.
+            notice = detector.last_error or getattr(
+                detector, "last_warning", None)
+            if notice:
+                out["error"] = notice
             stats = detector.window.stats
             out.update({"window_frames": stats["window_frames"],
                         "alarming": stats["alarming"],

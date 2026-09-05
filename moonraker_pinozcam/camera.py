@@ -209,6 +209,32 @@ def transform_image(image, source, logger=None):
     return image
 
 
+def transform_jpeg(jpeg, source, logger=None):
+    """Apply the camera transform to encoded JPEG bytes.
+
+    For callers that hold bytes rather than an image -- the live-view
+    fallback. Without this the page showed an UNtransformed picture between
+    prints and a transformed one during them, and the mask editor painted
+    on whichever it happened to get.
+    """
+    if not jpeg:
+        return jpeg
+    if not (getattr(source, "flip_h", False)
+            or getattr(source, "flip_v", False)
+            or int(getattr(source, "rotation", 0) or 0) % 360):
+        return jpeg                     # nothing to do; keep the bytes
+    from io import BytesIO
+    from PIL import Image
+    try:
+        image = transform_image(
+            Image.open(BytesIO(jpeg)).convert("RGB"), source, logger=logger)
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=85)
+        return out.getvalue()
+    except Exception:                                        # noqa: BLE001
+        return jpeg
+
+
 def build_frame_source(source, logger=None, identity="pinozcam"):
     """The right FrameSource for this camera's URL.
 
