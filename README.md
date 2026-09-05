@@ -92,7 +92,7 @@ undetect zone. It is the same layout as the OctoPrint plugin's tab.
 > **This page has no login and answers anyone who can reach the printer.**
 > That is why bot tokens are *not* editable there and are never sent to it
 > -- they live in the config file. Do not port-forward this port, or
-> OctoPrint's, to the public internet; see
+> Moonraker's, to the public internet; see
 > [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) for what to do instead.
 
 ### Mainsail and Fluidd

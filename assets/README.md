@@ -26,32 +26,19 @@ than a 420 px-wide table cell needs on a machine that also has to run a
 printer. They are therefore **not** byte-identical to upstream's copies;
 everything else here is.
 
-## Still needed — this build's own interface
+## No interface screenshots yet
 
-The OctoPrint build's remaining screenshots are of **its** tab and settings
-pages, which do not exist here, so they were deliberately not copied. These
-have to be taken from the page this service serves.
+The OctoPrint build's remaining images are of **its** tab and settings
+pages, which do not exist here, so they were deliberately not copied and
+nothing was substituted for them. The README and the guides describe the
+page in words instead.
 
-Open `http://<printer>:58888` in a browser and capture:
+When shots of this build's own page are taken, the ones worth having are
+the main view during a print, the settings dialog, the undetect-zone
+editor, and PiNozCam sitting in Mainsail's own camera list -- that last one
+being the thing this port does that the OctoPrint build has no equivalent
+of.
 
-| file to create | what it must show | how to get there |
-|---|---|---|
-| `page_main.jpg` | the whole page during a print: camera view, Status panel with its two buttons, the chip row (AI running / Telegram / Discord / backend), and the failure-ratio gauge with its threshold mark | start a print and wait for detection to arm |
-| `page_settings.jpg` | the settings dialog on **Detection**, showing the five-step Sensitivity slider and a couple of the `?` help texts expanded | press the wrench |
-| `page_zone.jpg` | the undetect-zone editor with a real mask painted over something fixed — a bed clip or the parked toolhead — and the toolbar visible | press the eye-with-a-slash |
-| `page_welcome.jpg` | the first-run page | clear `pinozcam-welcomed` from the browser's local storage and reload |
-| `mainsail_camera.jpg` | **PiNozCam appearing in Mainsail's own camera list**, next to the ordinary camera | Mainsail → the webcam selector |
-
-That last one is worth taking care over: it is the thing this port does that
-the OctoPrint build has no equivalent of, and it is what shows a Klipper
-user that PiNozCam lands inside the UI they already use rather than beside
-it.
-
-Take them at a browser width around 1200-1400 px so the two-column layout
-is visible rather than the stacked mobile one. A dark-theme browser matches
-the page, which is drawn in Vuetify's dark palette to sit beside Mainsail.
-
-⚠️ Do not photograph a page that has real bot credentials on screen. The
-settings page shows a saved token as eight dots, never the value, so the
-Monitoring tab is safe — but check the chip row and any log output in the
-same frame.
+⚠️ Whatever is captured, do not photograph a page with real credentials in
+frame. The settings page shows a saved token as eight dots and never the
+value, so that tab is safe by itself; the surrounding window may not be.

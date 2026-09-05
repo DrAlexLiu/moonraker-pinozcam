@@ -62,6 +62,14 @@ on Failure can trigger after warm-up. Lowering it reacts when fewer recent
 frames are alarming; raising it requires the failure to persist across more
 of the recent history.
 
+<p align="center">
+  <img src="../assets/images/failure_detection2.jpg" alt="An alarming frame: the detector's boxes over a failing print" width="560">
+</p>
+
+<p align="center"><em>One alarming frame. The boxes are what passed the
+score threshold; their union area against the camera content is what the
+area threshold is compared to.</em></p>
+
 For example, suppose the detection scores are `0.95`, `0.90`, and `0.70`:
 
 1. With Detection Score Threshold `0.85`, the `0.95` and `0.90` boxes count;
