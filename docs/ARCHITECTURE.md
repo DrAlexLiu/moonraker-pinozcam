@@ -473,11 +473,24 @@ carried enough noise to show *lower* jitter under load. `schedstat` is a
 kernel counter of a specific thread's queueing, with no such ambiguity.
 
 ⚠️ **Those numbers were measured under a worse condition than intended.**
-The daemon asks for `nice 10` (yield) but actually runs at **-19** (highest
-priority) -- a known pre-existing quirk, also seen on rk3588, not
-investigated here. It makes the result stronger rather than weaker: even
-with the detector preempting everything, Klipper's serial threads waited
-0.5 ms out of 15 s.
+
+**Known platform behaviour, not a bug in this project: an RKNN daemon always
+ends up at `nice -19`, whatever it asks for.** User-confirmed on rk3588 as
+well as rk3566. The daemon passes `nice 10` (yield) in argv and calls
+`setpriority()` with it; the CPU daemon, running the identical code path,
+reports `nice=10` correctly. Only the RKNN backend is overridden.
+
+It does not come through the normal route: `nm --undefined-only -D
+librknnrt.so` finds **zero** references to `setpriority`, `sched_set*` or
+`pthread_setschedparam`, so the library is not calling libc for it -- either
+it issues the syscall directly, or the rknpu kernel driver raises the
+priority when the process opens the NPU device. The library does carry
+`GPUPriorityLevel::PRIORITY_{HIGH,LOW,NORMAL}` strings. **Do not spend time
+trying to make `nice` stick on an RKNN board; it will not.**
+
+The measurement is stronger for it, not weaker: even with the detector
+preempting everything at the highest priority the scheduler offers,
+Klipper's serial threads waited 0.5 ms out of 15 s.
 
 ⚠️ Still not a substitute for a real board. It shows the detector does not
 push the serial threads aside; it says nothing about whether a Buddy board's
