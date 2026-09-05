@@ -16,7 +16,7 @@ from .window import FailureWindow
 # One tick of the loop. It is independent of the frame source's own rate: a source may produce
 # faster, and wait_next()'s sequence argument makes the loop skip what it
 # missed rather than fall behind.
-SAMPLE_INTERVAL = 0.2
+SAMPLE_INTERVAL = 0.2   # overridden per-config by frame_sample_interval
 
 # How long to wait for a frame before calling the camera missing.
 FRAME_WAIT = 5.0
@@ -39,9 +39,9 @@ class Detector(object):
         self._on_frame = on_frame          # called for every scored frame
 
         d = config.detection
-        self._score_threshold = d["score_threshold"]
-        self._sensitivity = d["sensitivity"]
-        self._start_delay = d["start_delay"]
+        self._score_threshold = d["scores_threshold"]
+        self._sensitivity = d["img_sensitivity"]
+        self._start_delay = d["ai_start_delay"]
         self._cpu_share = d["cpu_share"]
         self._cpus = None          # resolved once, at setup
 

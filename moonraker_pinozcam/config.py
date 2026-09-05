@@ -97,15 +97,49 @@ class Config(object):
 
     @property
     def detection(self):
+        """Detection settings.
+
+        Names, defaults and ranges mirror the OctoPrint build's
+        settings_schema.py so the two behave identically. The single
+        deliberate difference is cpu_share; see the config sample.
+        """
         return {
-            "score_threshold": self.getfloat("detection", "score_threshold", 0.87),
-            "sensitivity": self.getfloat("detection", "sensitivity", 0.04),
-            # Defaults are the OctoPrint build's, verified against its
-            # settings_schema.py rather than taken from notes.
-            "failure_ratio": self.getfloat("detection", "failure_ratio", 0.05),
+            "enable_ai": self.getbool("detection", "enable_ai", True),
+            "ai_backend": self.get("detection", "ai_backend", "auto"),
+            "action": self.getint("detection", "action", 0),
+            "ai_start_delay": self.getint("detection", "ai_start_delay", 0),
+            "detection_interval": self.getint(
+                "detection", "detection_interval", 0),
+            "img_sensitivity": self.getfloat(
+                "detection", "img_sensitivity", 0.04),
+            "scores_threshold": self.getfloat(
+                "detection", "scores_threshold", 0.87),
             "count_time": self.getint("detection", "count_time", 120),
-            "start_delay": self.getint("detection", "start_delay", 0),
-            "cpu_share": self.getfloat("detection", "cpu_share", 0.5),
+            "failure_ratio": self.getfloat(
+                "detection", "failure_ratio", 0.05),
+            "print_layout_threshold": self.getfloat(
+                "detection", "print_layout_threshold", 0.5),
+            # Milliseconds on the wire, seconds in the attribute -- the
+            # same convention the OctoPrint schema documents.
+            "frame_sample_interval": self.getint(
+                "detection", "frame_sample_interval", 200) / 1000.0,
+            "frame_buffer_max_age": self.getint(
+                "detection", "frame_buffer_max_age", 4),
+            "frame_buffer_capacity": self.getint(
+                "detection", "frame_buffer_capacity", 5),
+            # 0.75 here, 0.5 in the OctoPrint build. Klipper's ~1 s MCU
+            # buffer absorbs the host stalls OctoPrint's line-by-line
+            # streaming cannot.
+            "cpu_share": self.getfloat("detection", "cpu_share", 0.75),
+        }
+
+    @property
+    def notification(self):
+        return {
+            "max_notification": self.getint(
+                "notification", "max_notification", 0),
+            "notify_interval": self.getint(
+                "notification", "notify_interval", 60),
         }
 
     @property

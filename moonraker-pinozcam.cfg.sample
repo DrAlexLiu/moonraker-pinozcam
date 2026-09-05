@@ -3,83 +3,124 @@
 # Copy to ~/printer_data/config/moonraker-pinozcam.cfg and edit.
 # Mainsail and Fluidd can edit this file directly in the browser
 # (Machine -> Configuration Files); no SSH needed.
+#
+# ⚠️ Every setting below mirrors the OctoPrint build's settings_schema.py --
+# same names, same defaults, same ranges -- so a printer moved between the
+# two behaves identically. The ONE deliberate difference is cpu_share, and
+# the reason is recorded next to it. Sections marked "Klipper only" have no
+# OctoPrint counterpart because OctoPrint supplies that information itself.
 
+# ---- Klipper only: how to reach Moonraker -------------------------------
 [moonraker]
 host = 127.0.0.1
 port = 7125
 # api_key =        # only if Moonraker's authorization is enabled
 
-[camera]
-# Snapshot URL. On a stock Klipper install crowsnest serves this.
-snapshot_url = http://127.0.0.1:8080/?action=snapshot
-# rotate = 0       # 0/90/180/270
-# flip_h = false
-# flip_v = false
-
+# ---- Detection ----------------------------------------------------------
 [detection]
-# These defaults match the OctoPrint build exactly, so a user moving a
-# printer between the two gets the same behaviour rather than having to
-# re-tune. Do not change one without changing the other.
+# Master switch.                                    (enableAI)
+enable_ai = true
 
-# Confidence a detection needs before it counts toward severity.
-score_threshold = 0.87
+# auto | cpu | rknn | awnn | acl | bpu | vulkan | coreml
+# Forcing a backend fails loudly if that hardware is absent, rather than
+# quietly using something else.                     (aiBackend)
+ai_backend = auto
+
+# What to do on a confirmed failure:
+#   0 = notify only, 1 = pause, 2 = stop            (action)
+action = 0
+
+# Seconds to skip at the start of a print.          (aiStartDelay)
+ai_start_delay = 0
+
+# Extra seconds between detections. 0 = no added delay.
+#                                                   (detectionInterval)
+detection_interval = 0
 
 # Area sensitivity: severity = affected_area / this, clamped to [0,1].
-# A frame "alarms" at severity >= 0.5, i.e. 2% of the frame at 0.04.
-sensitivity = 0.04
+# A frame alarms at severity >= 0.5.                (imgSensitivity)
+img_sensitivity = 0.04
 
-# Fraction of frames in the window that must alarm before acting.
-failure_ratio = 0.05
+# Confidence a detection needs before it counts.    (scoresThreshold)
+scores_threshold = 0.87
 
-# Sliding window length, seconds.
+# Sliding window length in seconds, 10-3600.        (countTime)
 count_time = 120
 
-# Seconds to skip at the start of a print. 0 means detect immediately.
-start_delay = 0
+# Fraction of frames in the window that must alarm, 0.01-1.0.
+#                                                   (failureRatio)
+failure_ratio = 0.05
 
-# Share of the performance cores the detector may use: 0.25, 0.5, 0.75, 1.0.
-# Same scale and same default as the OctoPrint build's CPU Speed Control.
-#
-# Extra cores buy less than their count suggests on these in-order hosts:
-# measured 2 to 4 cores is +15% on an A55 (RK3566) and +8% on an A53
-# (Pi 3B+), because they are memory-latency bound and wait on memory
-# together. Raising this to 1.0 is safe on an NPU board, where the CPU only
-# fetches and scales frames.
-cpu_share = 0.5
+# How much of the frame may be print before a detection is discounted.
+#                                                   (printLayoutThreshold)
+print_layout_threshold = 0.5
 
+# Milliseconds between samples, 10-1000.            (frameSampleInterval)
+frame_sample_interval = 200
+
+# Candidate buffer, both 4-16.        (frameBufferMaxAge/frameBufferCapacity)
+frame_buffer_max_age = 4
+frame_buffer_capacity = 5
+
+# ⚠️ THE ONE DELIBERATE DIFFERENCE FROM THE OCTOPRINT BUILD.
+# Share of the performance cores the detector may use, 0.01-1.0.
+# OctoPrint defaults this to 0.5; here it is 0.75, because the constraint
+# it protects against does not exist on Klipper. OctoPrint streams gcode
+# line by line, so a stalled host marks the print; Klipper computes a step
+# schedule and pushes about a second of it to the MCU ahead of time
+# (BUFFER_TIME_HIGH = 1.0), which absorbs host stalls entirely. Measured on
+# a CB2 under saturation, Klipper's serial threads were kept off the CPU for
+# 0.5 ms out of 15 s.                               (cpuSpeedControl)
+cpu_share = 0.75
+
+# ---- Camera -------------------------------------------------------------
+[camera]
+# Leave empty to discover the camera automatically: Moonraker's webcam list
+# first (which also supplies rotation and flip), then Klipper's standard
+# nginx path /webcam/. Set it to override.          (customSnapshotURL)
+snapshot_url =
+
+# Mask: MASK_GRID x MASK_GRID of "0"/"1", row-major, "1" = ignore.
+# Usually painted in the UI rather than typed.      (maskImageData)
+# mask_image_data =
+
+# ---- Notifications ------------------------------------------------------
+[telegram]
+enabled = false                                   # (enableTelegram)
+token =                                           # (telegramBotToken)
+chat_id =                                         # (telegramChatID)
+
+[discord]
+enabled = false                                   # (enableDiscord)
+bot_token =                                       # (discordBotToken)
+channel_id =                                      # (discordChannelID)
+
+[notification]
+# Maximum alerts per print. 0 = unlimited.          (maxNotification)
+max_notification = 0
+# Minimum seconds between alerts; suppressed ones are dropped, not queued.
+#                                                   (notifyInterval)
+notify_interval = 60
+
+# ---- Printer identity ---------------------------------------------------
+[printer]
+# Shown in alerts so one chat can serve several printers. Empty = derived
+# from Moonraker.                                   (printerId)
+name =
+
+# ---- Klipper only: the annotated view -----------------------------------
 [web]
-# Serves the annotated frame (detection boxes drawn on the camera image).
+# Serves the annotated frame (detection boxes drawn on the camera image):
 #   http://<printer>:58888/snapshot   single frame
 #   http://<printer>:58888/stream     MJPEG
 #
-# This is not a settings UI -- it exists so the annotated view can be added
-# to Mainsail/Fluidd as just another webcam. Obico does not need a local
-# port because it ships frames to its cloud; PiNozCam has no cloud, so the
-# view has to be reachable locally.
-#
-# 58888 is deliberately far from 8080/8081, which crowsnest uses for real
-# cameras. Set to 0 to disable and rely on Telegram/Discord alone.
+# This exists because a Klipper build has no plugin UI to draw into. It is
+# registered with Moonraker so it appears in Mainsail/Fluidd's camera list.
+# Set port to 0 to disable and rely on Telegram/Discord alone.
 port = 58888
-
-# Register the above with Moonraker on startup, so it appears in
-# Mainsail/Fluidd's camera list with no manual setup. Set false to leave
-# Moonraker's database untouched and add it yourself.
 register_webcam = true
 
-[action]
-# What to do when a failure is confirmed: none | pause | stop
-on_failure = pause
-
-[telegram]
-# enabled = false
-# token =
-# chat_id =
-
-[discord]
-# enabled = false
-# bot_token =
-# channel_id =
-
+# ---- Logging ------------------------------------------------------------
 [logging]
 # path = ~/printer_data/logs/moonraker-pinozcam.log
 # level = INFO
