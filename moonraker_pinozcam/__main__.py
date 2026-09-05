@@ -19,6 +19,7 @@ from .config import Config, ConfigError
 from .detector import Detector
 from .moonraker import MoonrakerClient
 from .notify import Notifier
+from .web import AnnotatedView
 
 LOG = logging.getLogger("pinozcam")
 
@@ -126,7 +127,8 @@ def main(argv=None):
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not %s the print: %s", action, exc)
 
-    detector = Detector(cfg, client, LOG, on_failure=on_failure)
+    view = AnnotatedView(cfg, client, LOG)
+    detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view)
     detector_ref[0] = detector
 
     def on_state_change(state):
@@ -161,6 +163,7 @@ def main(argv=None):
 
     notifier.start()
     client.start()
+    view.start()
     if client.wait_until_connected(timeout=30.0):
         try:
             cams = client.list_webcams()
@@ -185,6 +188,7 @@ def main(argv=None):
         pass
 
     detector.stop()
+    view.stop()
     notifier.stop()
     client.stop()
     LOG.info("stopped")

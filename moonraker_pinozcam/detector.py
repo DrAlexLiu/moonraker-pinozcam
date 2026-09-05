@@ -10,7 +10,7 @@ what gcode streaming also needs.
 import threading
 import time
 
-from . import camera, cpu_affinity, framesource, nozcam_backend
+from . import annotate, camera, cpu_affinity, framesource, nozcam_backend
 from .window import FailureWindow
 
 # One tick of the loop. It is independent of the frame source's own rate: a source may produce
@@ -31,12 +31,13 @@ class Detector(object):
     """Owns one detection run for one print."""
 
     def __init__(self, config, client, logger, on_failure=None,
-                 on_frame=None):
+                 on_frame=None, view=None):
         self._cfg = config
         self._client = client
         self._log = logger
         self._on_failure = on_failure      # called once per escalation
         self._on_frame = on_frame          # called for every scored frame
+        self._view = view                  # AnnotatedView, or None
 
         d = config.detection
         self._score_threshold = d["scores_threshold"]
@@ -211,6 +212,15 @@ class Detector(object):
             "boxes": boxes, "scores": scores, "elapsed": elapsed,
             "ratio": ratio, "alarming": alarming,
         }
+
+        # Publish the annotated frame for the web view. Encoding costs a
+        # JPEG per frame, so skip it when nothing is watching.
+        if self._view is not None and self._view.enabled:
+            try:
+                self._view.publish(
+                    annotate.annotate(image, boxes, scores, severity))
+            except Exception as exc:                         # noqa: BLE001
+                self._log.debug("could not annotate frame: %s", exc)
 
         if self._on_frame is not None:
             try:
