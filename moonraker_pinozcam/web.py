@@ -668,10 +668,12 @@ class AnnotatedView(object):
             "stream": self.stream_info(request_host),
         }
         # What the live view should be showing. frame_id is a cheap change
-        # detector: the page refetches the picture only when it moves, and
-        # boxes are sent only for an "analysis" frame -- boxes from one
-        # frame must never be drawn over another. Same contract as the
-        # OctoPrint build's /status.
+        # detector: the page refetches the picture only when it moves.
+        # ⚠️ Unlike the OctoPrint build, box COORDINATES are not sent --
+        # this build annotates the JPEG itself, because it also registers
+        # that view as a Moonraker webcam and Mainsail renders it as a
+        # plain <img> that cannot draw anything of its own. Sending them
+        # too would put every box on the picture twice.
         annotated, seq = self.frames.peek()
         if annotated is not None and self.frames.publishing():
             out["frame_kind"] = "analysis"
@@ -700,9 +702,6 @@ class AnnotatedView(object):
                 out["severity"] = last.get("severity")
                 out["model_ms"] = (last.get("elapsed") or 0) * 1000.0
                 out["alarming"] = bool(last.get("alarming"))
-                if out.get("frame_kind") == "analysis":
-                    out["boxes"] = last.get("boxes_norm") or []
-                    out["scores"] = last.get("scores") or []
             if detector.backend_name:
                 out["backend"] = detector.backend_name
         return out

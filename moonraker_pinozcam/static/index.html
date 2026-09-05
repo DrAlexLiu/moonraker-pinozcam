@@ -673,7 +673,7 @@ $("b-welcome-done").onclick=async()=>{
    * Live Camera points the browser straight at the printer's own camera
      through nginx, so watching between prints costs this service
      nothing. */
-let liveMode=false, lastFrameId=null, curBoxes=[], streamInfo=null;
+let liveMode=false, lastFrameId=null, streamInfo=null;
 
 function applyFlip(){
   const f=[];
@@ -688,24 +688,26 @@ function applyFlip(){
 function showLive(on){
   liveMode=on&&!!streamInfo;
   $("b-live").classList.toggle("primary",liveMode);
-  lastFrameId=null; curBoxes=[]; applyFlip();
+  lastFrameId=null; applyFlip();
   $("view").src=liveMode?streamInfo.url:("snapshot?"+Date.now());
   drawBoxes();
 }
 $("b-live").onclick=()=>showLive(!liveMode);
 
 function drawBoxes(){
+  /* ⚠️ Only the MASK is drawn here, never detection boxes.
+     Unlike the OctoPrint build, this one must burn the boxes into the
+     JPEG anyway: it registers the annotated view as a Moonraker webcam,
+     and Mainsail shows that as a plain <img> which cannot draw anything
+     of its own. Drawing them here as well put every box on the picture
+     twice. The overlay's job is the undetect zone, which the server does
+     NOT burn in -- masked pixels are blacked out before inference, so
+     they would be invisible rather than outlined. */
   const cv=$("overlay"), img=$("view");
   if(!img.clientWidth)return;
-  cv.width=img.clientWidth; cv.height=img.clientHeight;
-  const x=cv.getContext("2d");
-  x.clearRect(0,0,cv.width,cv.height);
-  if(mask&&count())drawMask(cv,img,false);
-  x.lineWidth=2; x.strokeStyle="#ff5252";
-  for(const b of curBoxes)
-    x.strokeRect(b[0]*cv.width,b[1]*cv.height,
-                 (b[2]-b[0])*cv.width,(b[3]-b[1])*cv.height);
-  cv.style.display=(curBoxes.length||count())?"block":"none";
+  if(!count()||liveMode){ cv.style.display="none"; return; }
+  drawMask(cv,img,false);
+  cv.style.display="block";
 }
 
 /* ---------- status ---------- */
@@ -747,7 +749,6 @@ async function poll(){
       // Refetch only when the picture actually changed; /snapshot's ETag
       // makes even that cheap when it has not.
       lastFrameId=d.frame_id;
-      curBoxes=(d.frame_kind==="analysis"&&d.boxes)?d.boxes:[];
       $("view").src="snapshot?"+encodeURIComponent(d.frame_id);
     }
 
