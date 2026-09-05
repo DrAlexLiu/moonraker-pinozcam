@@ -63,10 +63,19 @@ class Notifier(ConfirmMixin):
                 self.discord = DiscordBot(
                     dc["bot_token"], dc["channel_id"], self._log,
                     self._on_command, printer_id=self.printer_id)
-                if self.discord.start():
-                    self._log.info("Discord bot started")
-                else:
-                    self.discord = None
+                # ⚠️ Deliberately NOT `if self.discord.start():`. Discord
+                # connects on a background thread and start() returns
+                # nothing, so a truth test on it always fails and drops the
+                # object that was just built -- while its gateway thread
+                # goes on connecting, which is what made this look like a
+                # working bot that never delivered anything. Telegram's
+                # start() does return a flag; these two are not symmetric.
+                try:
+                    self.discord.start()
+                except Exception:
+                    self.discord.stop(timeout=0)
+                    raise
+                self._log.info("Discord bot started")
             except Exception as exc:                         # noqa: BLE001
                 self._log.error("Discord bot could not start: %s", exc)
                 self.discord = None
@@ -87,32 +96,56 @@ class Notifier(ConfirmMixin):
 
     @property
     def printer_id(self):
-        """A stable short label so one chat can serve several printers."""
-        return self._cfg.get("printer", "name", "") or "printer"
+        """A stable short label so one chat can serve several printers.
+
+        The config file wins when it is set; otherwise the client resolves
+        it the way the OctoPrint build does -- frontend name, hostname,
+        then Moonraker's instance_id.
+        """
+        return (self._cfg.get("printer", "name", "")
+                or self._client.printer_name())
 
     # ---- outbound -----------------------------------------------------
 
     def alert(self, caption, image=None, with_buttons=True):
-        """Send one alert to every configured channel."""
+        """Send one alert to every configured channel.
+
+        `image` is raw JPEG bytes, or a file-like positioned at its start.
+        """
         if self._muted:
             self._log.info("Muted; not sending: %s", caption.split("\n")[0])
             return
         label = self.printer_id
         text = "%s\n%s" % (label, caption) if label else caption
 
+        # ⚠️ EVERY channel gets its OWN stream. Handing one BytesIO to both
+        # uploads the photo to whichever runs first and 0 bytes to the
+        # other: requests reads the object to EOF and nothing rewinds it.
+        # The bug hid for as long as Discord failed to start, because only
+        # one channel was ever live at a time. The OctoPrint build avoids
+        # it by passing a PIL Image and encoding a fresh stream per
+        # channel; this build already has the encoded bytes, so it copies
+        # those instead.
+        payload = image
+        if payload is not None and not isinstance(payload, bytes):
+            payload = payload.read()
+
+        def stream():
+            return io.BytesIO(payload) if payload else None
+
         if self.telegram is not None:
             from . import telegram_bot
             kb = telegram_bot.buttons(
                 paused=self._client.state.is_paused,
                 muted=self._muted) if with_buttons else None
-            self.telegram.send(caption=text, image=image, keyboard=kb)
+            self.telegram.send(caption=text, image=stream(), keyboard=kb)
 
         if self.discord is not None:
             from . import discord_bot
             comp = discord_bot.buttons(
                 label, paused=self._client.state.is_paused,
                 muted=self._muted) if with_buttons else None
-            self.discord.send(content=text, image=image, components=comp)
+            self.discord.send(content=text, image=stream(), components=comp)
 
     # ---- inbound ------------------------------------------------------
 
@@ -142,7 +175,7 @@ class Notifier(ConfirmMixin):
         line = self._status() if self._status else str(self._client.state)
         jpeg = self._snapshot() if self._snapshot else None
         if jpeg is not None:
-            self.alert(line, image=io.BytesIO(jpeg), with_buttons=True)
+            self.alert(line, image=jpeg, with_buttons=True)
             return None            # the photo IS the answer
         return line
 

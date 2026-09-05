@@ -3,219 +3,390 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PiNozCam</title>
 <style>
-/* Vuetify 2's dark palette -- Mainsail and Fluidd both render in it (same
-   stack: Vue 2.7 + Vuetify 2.7), so arriving here from the camera list does
-   not look like a different application. Read off a running Mainsail. */
-:root{--bg:#121212;--panel:#1e1e1e;--line:#2f2f2f;--fg:#e0e0e0;--dim:#9e9e9e;
-      --accent:#2196f3;--warn:#fb8c00;--alarm:#ff5252;--ok:#4caf50}
+/* Vuetify 2's dark palette. Mainsail and Fluidd both render in it (same
+   stack: Vue 2.7 + Vuetify 2.7), read off a running Mainsail. */
+:root{--bg:#121212;--panel:#1e1e1e;--panel2:#262626;--line:#2f2f2f;
+      --fg:#e0e0e0;--dim:#9e9e9e;--accent:#2196f3;--warn:#fb8c00;
+      --alarm:#ff5252;--ok:#4caf50}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
-     font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{padding:12px 16px;background:var(--panel);display:flex;gap:12px;
-       align-items:center;flex-wrap:wrap;box-shadow:0 2px 4px -1px rgba(0,0,0,.2)}
-h1{font-size:16px;margin:0;font-weight:600}
-.chip{font-size:11px;padding:3px 9px;border-radius:12px;background:#2a2a2a;
-      color:var(--dim);font-weight:500;letter-spacing:.02em}
-.chip.on{background:rgba(76,175,80,.16);color:var(--ok)}
-.chip.alarm{background:rgba(255,82,82,.16);color:var(--alarm)}
-#msg{margin-left:auto;font-size:12px;color:var(--dim)}
-main{display:grid;grid-template-columns:minmax(340px,1.5fr) minmax(320px,1fr);
-     gap:14px;padding:14px;align-items:start}
-@media(max-width:900px){main{grid-template-columns:1fr}}
-.card{background:var(--panel);border-radius:4px;padding:14px;
-      box-shadow:0 2px 1px -1px rgba(0,0,0,.2),0 1px 1px 0 rgba(0,0,0,.14),
-                 0 1px 3px 0 rgba(0,0,0,.12)}
-.card+.card{margin-top:14px}
-.card h2{font-size:12px;margin:0 0 12px;color:var(--dim);font-weight:600;
-         text-transform:uppercase;letter-spacing:.06em}
-#viewwrap{position:relative;line-height:0}
-#view{width:100%;border-radius:4px;display:block;background:#000}
-#maskcv{position:absolute;inset:0;width:100%;height:100%;border-radius:4px;
-        cursor:crosshair;touch-action:none;display:none}
-#viewwrap.editing #maskcv{display:block;outline:2px solid var(--alarm);
-        outline-offset:-2px}
-#viewwrap.editing::after{content:"MASK EDITING";position:absolute;left:0;
-        right:0;top:0;padding:6px 10px;background:rgba(255,82,82,.92);
-        color:#fff;font-size:11px;font-weight:600;letter-spacing:.06em;
-        border-radius:4px 4px 0 0;pointer-events:none}
-/* gauge, copied in spirit from the OctoPrint tab: a bar with the action
-   threshold marked on it, so the number has somewhere to sit. */
-.gauge{margin-bottom:12px}
+     font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:14px}
+
+/* ---- panel, mirroring the OctoPrint tab's pinozcam-panel ---- */
+.panel{background:var(--panel);border-radius:4px;
+  box-shadow:0 2px 1px -1px rgba(0,0,0,.2),0 1px 1px 0 rgba(0,0,0,.14),
+             0 1px 3px 0 rgba(0,0,0,.12)}
+.panel-head{display:flex;justify-content:space-between;align-items:center;
+  gap:12px;padding:12px 14px;flex-wrap:wrap}
+.panel-head+.panel-head{padding-top:0}
+h4{margin:0;font-size:15px;font-weight:600}
+.actions{display:flex;gap:6px;align-items:center}
+
+/* icon buttons, like pinozcam-icon-btn */
+.icon-btn{width:34px;height:34px;display:inline-flex;align-items:center;
+  justify-content:center;border:0;border-radius:4px;background:var(--panel2);
+  color:var(--fg);cursor:pointer;padding:0}
+.icon-btn:hover{background:#333}
+.icon-btn.primary{background:var(--accent);color:#fff}
+.icon-btn svg{width:17px;height:17px;fill:currentColor}
+
+/* chips, like pinozcam-chips */
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
+  padding:3px 9px;border-radius:12px;background:rgba(76,175,80,.16);
+  color:var(--ok);font-weight:500}
+.chip.chip-off{background:var(--panel2);color:var(--dim)}
+.chip.chip-alarm{background:rgba(255,82,82,.16);color:var(--alarm)}
+.chip svg{width:12px;height:12px;fill:currentColor}
+
+/* gauge, mirroring pinozcam-gauge */
+.gauge{padding:0 14px 12px}
 .gauge-head{display:flex;justify-content:space-between;font-size:13px;
-            margin-bottom:5px}
-.gauge-value{font-variant-numeric:tabular-nums;font-weight:600}
-.gauge-track{position:relative;height:7px;background:#2a2a2a;border-radius:4px;
-             overflow:hidden}
-.gauge-fill{height:100%;background:var(--accent);border-radius:4px;
-            transition:width .3s}
+  margin-bottom:6px}
+.gauge-name{color:var(--dim)}
+.gauge-value{font-weight:600;font-variant-numeric:tabular-nums}
+.gauge-track{position:relative;height:8px;background:var(--panel2);
+  border-radius:4px;overflow:hidden}
+.gauge-fill{height:100%;width:0;background:var(--accent);border-radius:4px;
+  transition:width .3s}
 .gauge-fill.alarm{background:var(--alarm)}
-.gauge-mark{position:absolute;top:-2px;width:2px;height:11px;
-            background:var(--warn)}
-.gauge-detail{font-size:12px;color:var(--dim);margin-top:5px}
-.tabs{display:flex;gap:2px;margin:-4px 0 12px;border-bottom:1px solid var(--line);
-      flex-wrap:wrap}
-.tabs button{background:none;color:var(--dim);border:0;border-bottom:2px solid transparent;
-             padding:8px 12px;font:inherit;font-size:12px;font-weight:600;
-             text-transform:uppercase;letter-spacing:.04em;cursor:pointer;
-             border-radius:0}
+.gauge-mark{position:absolute;top:-3px;width:2px;height:14px;
+  background:var(--warn);border-radius:1px}
+.gauge-detail,.ai-detail{font-size:12px;color:var(--dim);margin-top:6px}
+
+/* view */
+#viewwrap{position:relative;line-height:0;background:#000;
+  border-radius:4px 4px 0 0;overflow:hidden}
+#view{width:100%;display:block}
+#overlay{position:absolute;inset:0;width:100%;height:100%;display:none;
+  cursor:crosshair;touch-action:none}
+.alert{margin:0 14px 12px;padding:9px 11px;border-radius:4px;font-size:13px}
+.alert-error{background:rgba(255,82,82,.14);color:#ff8a80}
+.alert-info{background:rgba(33,150,243,.12);color:#90caf9}
+
+/* ---- dialogs ---- */
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;
+  align-items:center;justify-content:center;padding:16px;z-index:50}
+.backdrop.open{display:flex}
+.dialog{background:var(--panel);border-radius:4px;width:100%;
+  max-width:680px;max-height:92vh;display:flex;flex-direction:column;
+  box-shadow:0 11px 15px -7px rgba(0,0,0,.2),0 24px 38px 3px rgba(0,0,0,.14)}
+.dialog.wide{max-width:940px}
+.dialog-head{display:flex;justify-content:space-between;align-items:center;
+  padding:14px 16px;border-bottom:1px solid var(--line)}
+.dialog-head h3{margin:0;font-size:16px;font-weight:600}
+.dialog-body{padding:14px 16px;overflow:auto;flex:1}
+.dialog-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;
+  border-top:1px solid var(--line);flex-wrap:wrap}
+.x{background:none;border:0;color:var(--dim);font-size:22px;cursor:pointer;
+  line-height:1;padding:0 4px}
+
+/* tabs, like the settings page's nav-pills */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);
+  margin:-14px -16px 14px;padding:0 10px;flex-wrap:wrap}
+.tabs button{background:none;color:var(--dim);border:0;
+  border-bottom:2px solid transparent;padding:10px 13px;font:inherit;
+  font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  cursor:pointer}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
 .pane{display:none}.pane.on{display:block}
+
+/* fields */
 .f{padding:9px 0;border-bottom:1px solid var(--line)}
 .f:last-child{border-bottom:0}
 .f-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.f label{color:var(--fg);font-size:13px}
-.f .help{color:var(--dim);font-size:12px;margin-top:4px;display:none}
+.f label{font-size:13px}
+.f .help{color:var(--dim);font-size:12px;margin-top:6px;display:none;
+  padding-left:2px;border-left:2px solid var(--line);padding:6px 0 6px 9px}
 .f.open .help{display:block}
-.f .q{color:var(--dim);cursor:pointer;font-size:12px;border:1px solid var(--line);
-      border-radius:50%;width:17px;height:17px;line-height:15px;text-align:center;
-      flex:0 0 auto;user-select:none}
-input[type=number],input[type=text],select{background:#151515;color:var(--fg);
-      border:1px solid var(--line);border-radius:4px;padding:6px 8px;font:inherit;
-      font-size:13px;width:112px;text-align:right}
-input[type=text]{width:190px;text-align:left}
-select{width:150px;text-align:left}
+.q{color:var(--dim);cursor:pointer;font-size:11px;border:1px solid var(--line);
+  border-radius:50%;width:18px;height:18px;line-height:16px;text-align:center;
+  flex:0 0 auto;user-select:none}
+input[type=number],input[type=text],input[type=password],select{
+  background:#151515;color:var(--fg);border:1px solid var(--line);
+  border-radius:4px;padding:6px 8px;font:inherit;font-size:13px;width:118px;
+  text-align:right}
+input[type=text],input[type=password]{width:200px;text-align:left}
+select{width:158px;text-align:left}
 input[type=range]{width:150px;accent-color:var(--accent)}
 input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)}
-button{background:var(--accent);color:#fff;border:0;border-radius:4px;
-       padding:8px 16px;font:inherit;font-weight:500;font-size:13px;
-       letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
-button.ghost{background:transparent;color:var(--accent);
-             box-shadow:inset 0 0 0 1px var(--line)}
-button.sm{padding:5px 9px;font-size:11px}
-.actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center}
-.note{color:var(--dim);font-size:12px;margin-top:10px}
-.stat{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
-.stat b{font-weight:600;font-variant-numeric:tabular-nums}
-.recent{font-size:12px;color:var(--dim)}
-.recent div{padding:4px 0;border-bottom:1px solid var(--line);
-            display:flex;justify-content:space-between;gap:8px}
+button.btn{background:var(--accent);color:#fff;border:0;border-radius:4px;
+  padding:8px 16px;font:inherit;font-weight:500;font-size:13px;
+  letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+button.btn.ghost{background:transparent;color:var(--accent);
+  box-shadow:inset 0 0 0 1px var(--line)}
+button.btn.sm{padding:6px 10px;font-size:11px}
+button.btn.on{background:var(--accent);color:#fff}
+.tool{background:var(--panel2);color:var(--fg);border:0;border-radius:4px;
+  padding:6px 10px;font:inherit;font-size:12px;cursor:pointer}
+.tool.on{background:var(--accent);color:#fff}
+
+.statechip{font-size:12px;color:var(--dim);font-weight:600}
+.statechip.on{color:var(--ok)}
+code{background:var(--panel2);padding:1px 4px;border-radius:3px;font-size:11px}
+.mask-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  margin-bottom:10px}
+.mask-tools{display:flex;gap:4px}
+.mask-meta{color:var(--dim);font-size:12px;margin-left:auto}
+
+.recent div{display:flex;justify-content:space-between;padding:5px 0;
+  border-bottom:1px solid var(--line);font-size:12px;color:var(--dim)}
 .recent div:last-child{border-bottom:0}
 .recent .sev{color:var(--alarm);font-weight:600;font-variant-numeric:tabular-nums}
-footer{padding:16px;text-align:center;color:var(--dim);font-size:12px}
+.stat{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
+.stat b{font-weight:600;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:minmax(340px,1.55fr) minmax(280px,1fr);
+  gap:14px;align-items:start}
+@media(max-width:880px){.grid{grid-template-columns:1fr}}
+.step{margin-bottom:18px}
+.step h5{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--accent)}
+#msg{font-size:12px;color:var(--dim)}
+footer{padding:14px;text-align:center;color:var(--dim);font-size:12px}
 footer a{color:var(--dim);text-decoration:none;margin:0 8px}
 footer a:hover{color:var(--accent)}
 </style>
 
-<header>
-  <h1>PiNozCam</h1>
-  <span class="chip" id="c-detect">—</span>
-  <span class="chip" id="c-printer">—</span>
-  <span class="chip" id="c-backend">—</span>
-  <span id="msg"></span>
-</header>
+<div class="wrap">
+<div class="grid">
+  <!-- ============ main panel, like the OctoPrint tab ============ -->
+  <div class="panel">
+    <div id="viewwrap">
+      <img id="view" alt="">
+      <canvas id="overlay"></canvas>
+    </div>
 
-<main>
-  <div>
-    <div class="card">
-      <div id="viewwrap"><img id="view" alt="camera"><canvas id="maskcv"></canvas></div>
+    <div class="panel-head">
+      <h4>Status</h4>
       <div class="actions">
-        <button class="ghost" id="b-mask">Undetect zone</button>
-        <span id="masktools" style="display:none">
-          <button class="ghost sm" id="b-brush-">Brush −</button>
-          <button class="ghost sm" id="b-brush+">Brush +</button>
-          <button class="ghost sm" id="b-undo">Undo</button>
-          <button class="ghost sm" id="b-clear">Clear</button>
-          <button class="sm" id="b-savemask">Save zone</button>
-        </span>
-        <span class="note" id="maskmeta" style="margin:0 0 0 auto"></span>
+        <button class="icon-btn primary" id="b-mask"
+          title="Set Undetect Zone — mark areas the detector should ignore">
+          <svg viewBox="0 0 640 512"><path d="M320 400c-75 0-136-61-136-136 0-19 4-37 11-53L38 79A315 315 0 0 0 3 246a29 29 0 0 0 0 20c46 100 149 182 317 182 39 0 75-5 108-14l-53-41c-17 5-36 7-55 7zm313 42-91-70a316 316 0 0 0 95-106 29 29 0 0 0 0-20C591 146 488 64 320 64c-49 0-93 8-131 20L45 3a16 16 0 0 0-22 3L3 31a16 16 0 0 0 3 23l591 457a16 16 0 0 0 23-3l19-25a16 16 0 0 0-3-23z"/></svg>
+        </button>
+        <button class="icon-btn" id="b-settings" title="PiNozCam settings">
+          <svg viewBox="0 0 512 512"><path d="M501 364l-59-34a186 186 0 0 0 0-148l59-34a12 12 0 0 0 5-14 241 241 0 0 0-53-92 12 12 0 0 0-14-2l-59 34a184 184 0 0 0-128-74V0a12 12 0 0 0-9-12 243 243 0 0 0-106 0 12 12 0 0 0-9 12v34a184 184 0 0 0-128 74L41 74a12 12 0 0 0-15 2 241 241 0 0 0-53 92 12 12 0 0 0 5 14l59 34a186 186 0 0 0 0 148l-59 34a12 12 0 0 0-5 14 241 241 0 0 0 53 92 12 12 0 0 0 15 2l59-34a184 184 0 0 0 128 74v34a12 12 0 0 0 9 12 243 243 0 0 0 106 0 12 12 0 0 0 9-12v-34a184 184 0 0 0 128-74l59 34a12 12 0 0 0 14-2 241 241 0 0 0 53-92 12 12 0 0 0-5-14zM256 336a80 80 0 1 1 0-160 80 80 0 0 1 0 160z"/></svg>
+        </button>
       </div>
     </div>
 
-    <div class="card">
-      <h2>Status</h2>
-      <div class="gauge">
-        <div class="gauge-head"><span>Failure ratio</span>
-          <span class="gauge-value" id="g-val">—</span></div>
-        <div class="gauge-track">
-          <div class="gauge-fill" id="g-fill" style="width:0"></div>
-          <div class="gauge-mark" id="g-mark" style="left:0"></div>
-        </div>
-        <div class="gauge-detail" id="g-detail">—</div>
+    <div class="panel-head">
+      <div class="chips">
+        <span class="chip chip-off" id="c-ai">AI not started</span>
+        <span class="chip chip-off" id="c-tg" title="Telegram monitoring and alerts">
+          <svg viewBox="0 0 496 512"><path d="M248 8a248 248 0 1 0 0 496 248 248 0 0 0 0-496zm121 169-40 190c-3 13-11 16-22 10l-60-45-29 28c-4 3-6 6-12 6l4-61 111-100c5-4-1-7-8-3L176 265l-59-18c-13-4-13-13 3-19l232-89c11-4 20 2 17 20z"/></svg>
+          <span id="c-tg-t">not set</span></span>
+        <span class="chip chip-off" id="c-dc" title="Discord monitoring and alerts">
+          <svg viewBox="0 0 640 512"><path d="M524 69A487 487 0 0 0 404 32a339 339 0 0 0-16 32 452 452 0 0 0-136 0 333 333 0 0 0-17-32 484 484 0 0 0-120 37C40 184 22 294 31 403a491 491 0 0 0 149 75 361 361 0 0 0 32-52 318 318 0 0 1-50-24l12-10a351 351 0 0 0 299 0l13 10a319 319 0 0 1-51 24 358 358 0 0 0 32 52 489 489 0 0 0 149-75c11-126-18-235-92-334zM222 337c-29 0-53-27-53-59s23-60 53-60 54 27 53 60c0 32-23 59-53 59zm197 0c-29 0-53-27-53-59s23-60 53-60 54 27 53 60c0 32-23 59-53 59z"/></svg>
+          <span id="c-dc-t">not set</span></span>
+        <span class="chip chip-off" id="c-backend">backend --</span>
       </div>
+      <div class="actions">
+        <a href="https://github.com/DrAlexLiu/moonraker-pinozcam" target="_blank"
+           rel="noopener noreferrer" class="icon-btn"
+           title="Source code, releases and issue tracker">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        </a>
+        <a href="https://discord.gg/gv4tKJ2ZKr" target="_blank"
+           rel="noopener noreferrer" class="icon-btn"
+           title="Get help and share results with other PiNozCam users">
+          <svg viewBox="0 0 640 512"><path d="M524 69A487 487 0 0 0 404 32a339 339 0 0 0-16 32 452 452 0 0 0-136 0 333 333 0 0 0-17-32 484 484 0 0 0-120 37C40 184 22 294 31 403a491 491 0 0 0 149 75 361 361 0 0 0 32-52 318 318 0 0 1-50-24l12-10a351 351 0 0 0 299 0l13 10a319 319 0 0 1-51 24 358 358 0 0 0 32 52 489 489 0 0 0 149-75c11-126-18-235-92-334zM222 337c-29 0-53-27-53-59s23-60 53-60 54 27 53 60c0 32-23 59-53 59zm197 0c-29 0-53-27-53-59s23-60 53-60 54 27 53 60c0 32-23 59-53 59z"/></svg>
+        </a>
+      </div>
+    </div>
+
+    <div class="gauge" title="What fraction of the recent window was alarming. The bar fills toward the point where PiNozCam acts; the tick marks that threshold.">
+      <div class="gauge-head">
+        <span class="gauge-name">Failure ratio</span>
+        <span class="gauge-value" id="g-val">no data yet</span>
+      </div>
+      <div class="gauge-track">
+        <div class="gauge-fill" id="g-fill"></div>
+        <div class="gauge-mark" id="g-mark"></div>
+      </div>
+      <div class="gauge-detail" id="g-detail"></div>
+      <div class="ai-detail" id="ai-detail"></div>
+    </div>
+    <div class="alert alert-error" id="err" style="display:none"></div>
+  </div>
+
+  <!-- ============ side column ============ -->
+  <div>
+    <div class="panel" style="padding:14px">
+      <h4 style="font-size:12px;color:var(--dim);text-transform:uppercase;
+                 letter-spacing:.06em;margin-bottom:10px">Detection</h4>
+      <div class="stat"><span>Frames in window</span><b id="s-frames">—</b></div>
+      <div class="stat"><span>Alarming</span><b id="s-alarm">—</b></div>
       <div class="stat"><span>Last severity</span><b id="s-sev">—</b></div>
       <div class="stat"><span>Inference</span><b id="s-ms">—</b></div>
       <div class="stat"><span>Checks / min</span><b id="s-rate">—</b></div>
     </div>
-
-    <div class="card">
-      <h2>Recent failures</h2>
-      <div class="recent" id="recent">None this print.</div>
+    <div class="panel" style="padding:14px;margin-top:14px">
+      <h4 style="font-size:12px;color:var(--dim);text-transform:uppercase;
+                 letter-spacing:.06em;margin-bottom:10px">Recent failures</h4>
+      <div class="recent" id="recent" style="font-size:12px;color:var(--dim)">
+        None this print.</div>
     </div>
   </div>
-
-  <div class="card">
-    <h2>Settings</h2>
-    <div class="tabs">
-      <button class="on" data-p="detection">Detection</button>
-      <button data-p="performance">Performance</button>
-      <button data-p="notify">Alerts</button>
-      <button data-p="camera">Camera</button>
-    </div>
-
-    <div class="pane on" id="p-detection"></div>
-    <div class="pane" id="p-performance"></div>
-    <div class="pane" id="p-notify"></div>
-    <div class="pane" id="p-camera"></div>
-
-    <div class="actions">
-      <button id="b-save">Save</button>
-      <button class="ghost" id="b-reload">Reload</button>
-    </div>
-    <div class="note">Written to moonraker-pinozcam.cfg. Changes apply to the
-      next print.</div>
-  </div>
-</main>
+</div>
+</div>
 
 <footer>
-  <!-- GitHub points at THIS project, not the OctoPrint one: a user here
-       needs the repository whose issues and releases apply to what they
-       are running. The community links are shared between both builds. -->
-  <a href="https://github.com/DrAlexLiu/moonraker-pinozcam" target="_blank"
-     rel="noopener">GitHub</a>
-  <a href="https://github.com/DrAlexLiu/moonraker-pinozcam/issues"
-     target="_blank" rel="noopener">Report an issue</a>
-  <a href="https://discord.gg/gv4tKJ2ZKr" target="_blank"
-     rel="noopener">Discord</a>
+  <a href="https://github.com/DrAlexLiu/moonraker-pinozcam" target="_blank" rel="noopener noreferrer">GitHub</a>
+  <a href="https://github.com/DrAlexLiu/moonraker-pinozcam/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
+  <a href="https://discord.gg/gv4tKJ2ZKr" target="_blank" rel="noopener noreferrer">Discord</a>
   <div style="margin-top:6px" id="ver"></div>
 </footer>
 
+<!-- ============ settings dialog ============ -->
+<div class="backdrop" id="d-settings">
+ <div class="dialog">
+  <div class="dialog-head"><h3>PiNozCam Settings</h3>
+    <button class="x" data-close>&times;</button></div>
+  <div class="dialog-body">
+    <div class="tabs">
+      <button class="on" data-p="detection">Detection</button>
+      <button data-p="performance">Performance</button>
+      <button data-p="notify">Monitoring &amp; Alerts</button>
+      <button data-p="camera">Camera</button>
+    </div>
+    <div class="pane on" id="p-detection"></div>
+    <div class="pane" id="p-performance"></div>
+    <div class="pane" id="p-notify">
+      <p style="margin:0 0 4px;color:var(--dim);font-size:12px">
+        Bot tokens are set in <code>moonraker-pinozcam.cfg</code>, not here.
+        This page has no login and answers anyone on the network, so it is
+        never given a credential to hand back. Mainsail and Fluidd can edit
+        that file in the browser under Machine &rarr; Configuration Files.</p>
+    </div>
+    <div class="pane" id="p-camera"></div>
+  </div>
+  <div class="dialog-foot">
+    <span id="msg" style="margin-right:auto"></span>
+    <button class="btn ghost" data-close>Cancel</button>
+    <button class="btn" id="b-save">Save</button>
+  </div>
+ </div>
+</div>
+
+<!-- ============ mask dialog ============ -->
+<div class="backdrop" id="d-mask">
+ <div class="dialog wide">
+  <div class="dialog-head"><h3>Undetect Zone</h3>
+    <button class="x" data-close>&times;</button></div>
+  <div class="dialog-body">
+    <div class="mask-toolbar">
+      <span class="mask-tools">
+        <button class="tool on" id="t-brush" title="Paint areas the AI should ignore. Use the -/+ buttons to change the brush size.">Paint</button>
+        <button class="tool" id="t-erase" title="Remove areas from the mask.">Erase</button>
+        <button class="tool" id="t-rect" title="Drag a rectangle to mask a whole region at once. Most real exclusions are rectangular: a bed edge, a logo on the bed, the print head parking spot.">Rect</button>
+        <button class="tool" id="t-rect-erase" title="Drag a rectangle to unmask a region.">Rect erase</button>
+      </span>
+      <span class="mask-tools">
+        <button class="tool" id="t-smaller" title="Smaller brush">&minus;</button>
+        <span id="brushsize" style="font-size:12px;color:var(--dim);min-width:22px;text-align:center"></span>
+        <button class="tool" id="t-larger" title="Larger brush">+</button>
+      </span>
+      <span class="mask-tools">
+        <button class="tool" id="t-undo" title="Undo the last stroke">Undo</button>
+        <button class="tool" id="t-redo" title="Redo">Redo</button>
+        <button class="tool" id="t-clear" title="Clear the whole mask (undoable)">Clear</button>
+      </span>
+      <span class="mask-meta" id="maskmeta"></span>
+    </div>
+    <div id="maskwrap" style="position:relative;line-height:0;background:#000;border-radius:4px;overflow:hidden">
+      <img id="maskimg" style="width:100%;display:block" alt="">
+      <canvas id="maskcv" style="position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none"></canvas>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <button class="btn ghost" data-close>Cancel</button>
+    <button class="btn" id="b-savemask" title="Save exactly what is shown and close">Save zone</button>
+  </div>
+ </div>
+</div>
+
+<!-- ============ welcome / first run ============ -->
+<div class="backdrop" id="d-welcome">
+ <div class="dialog">
+  <div class="dialog-head"><h3>Welcome to PiNozCam</h3></div>
+  <div class="dialog-body">
+    <p style="margin-top:0;color:var(--dim)">PiNozCam watches your print
+      through the camera and tells you when it starts to fail.
+      <b style="color:var(--fg)">Everything runs on this machine</b> — no
+      cloud account, no subscription, and it keeps working without
+      internet.</p>
+
+    <div class="step">
+      <h5>1. Point it at a camera</h5>
+      <div id="w-cam" style="font-size:13px;color:var(--dim)">Checking…</div>
+    </div>
+    <div class="step">
+      <h5>2. Choose a starting sensitivity</h5>
+      <div class="f"><div class="f-top">
+        <label>Sensitivity</label>
+        <span style="display:flex;align-items:center;gap:9px">
+          <input type="range" id="w-level" min="1" max="5" step="1" value="3">
+          <b id="w-levelname" style="min-width:64px;font-size:12px"></b></span>
+      </div></div>
+      <div style="font-size:12px;color:var(--dim);margin-top:8px">
+        Stricter reacts only to obvious failures; looser catches more but
+        can misfire on a busy background. Medium is a good place to start —
+        you can change it any time from the settings.</div>
+    </div>
+    <div class="step">
+      <h5>3. What happens when it finds one</h5>
+      <div class="f"><div class="f-top">
+        <label>Action on failure</label>
+        <select id="w-action">
+          <option value="0">Alert only</option>
+          <option value="1">Pause</option>
+          <option value="2">Stop</option>
+        </select></div></div>
+      <div style="font-size:12px;color:var(--dim);margin-top:8px">
+        Alert only is the safe starting choice: you get the message and the
+        photo, and decide yourself.</div>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <button class="btn ghost" id="b-skip">Skip</button>
+    <button class="btn" id="b-welcome-done">Start detecting</button>
+  </div>
+ </div>
+</div>
+
 <script>
-const GRID = 128, $ = i => document.getElementById(i);
+const GRID=128, $=i=>document.getElementById(i);
+const LEVELS=[null,
+ {scores_threshold:0.93,img_sensitivity:0.06,failure_ratio:0.10},
+ {scores_threshold:0.90,img_sensitivity:0.05,failure_ratio:0.08},
+ {scores_threshold:0.87,img_sensitivity:0.04,failure_ratio:0.05},
+ {scores_threshold:0.84,img_sensitivity:0.03,failure_ratio:0.03},
+ {scores_threshold:0.80,img_sensitivity:0.02,failure_ratio:0.01}];
+const LEVEL_NAMES=[null,"Strictest","Strict","Medium","Loose","Loosest"];
 
-// Presets copied from the OctoPrint build's LEVELS, values and names both.
-const LEVELS = [null,
-  {scores_threshold:0.93, img_sensitivity:0.06, failure_ratio:0.10},
-  {scores_threshold:0.90, img_sensitivity:0.05, failure_ratio:0.08},
-  {scores_threshold:0.87, img_sensitivity:0.04, failure_ratio:0.05},
-  {scores_threshold:0.84, img_sensitivity:0.03, failure_ratio:0.03},
-  {scores_threshold:0.80, img_sensitivity:0.02, failure_ratio:0.01}];
-const LEVEL_NAMES = [null,"Strictest","Strict","Medium","Loose","Loosest"];
-
-// Fields, mirroring the OctoPrint settings page: same labels, same order,
-// same controls -- numbers are number inputs there, not sliders.
-const FIELDS = {
+const FIELDS={
 detection:[
  ["enable_ai","Enable AI Failure Analysis","check",{},
-  "Turning this off only pauses the analysis. The camera and remote monitoring keep working."],
+  "Turning this off only pauses the analysis. The camera and alerts keep working."],
  ["__level","Sensitivity","level",{},
-  "A preset for the three thresholds below. Moving it overwrites them; editing them by hand shows Custom."],
+  "A preset for the three thresholds below. Moving it overwrites them; editing one by hand shows Custom."],
  ["img_sensitivity","Failure Area Threshold","num",{min:0.0001,max:1,step:0.001},
   "How much of the frame a detected failure must cover before that frame counts as alarming."],
  ["scores_threshold","Detection Score Threshold","num",{min:0,max:1,step:0.01},
   "How confident the model must be before a detection counts at all."],
  ["failure_ratio","Failure Ratio Threshold","num",{min:0.01,max:1,step:0.01},
-  "What fraction of frames in the window must alarm before the action triggers. A fraction, not a count, so it means the same on a slow board and a fast one."],
+  "What fraction of frames in the window must alarm before the action triggers. A fraction rather than a count, so it means the same on a slow board and a fast one."],
  ["count_time","Black Box Length (s)","num",{min:10,max:3600,step:10},
-  "The recent history window. Nothing is recorded; results older than this are forgotten. Changing this resets the running baseline."],
- ["action","Action on Failure","sel",
-  {options:[[0,"Alert only"],[1,"Pause"],[2,"Stop"]]},
-  "Alert only sends a message without touching the printer."],
+  "The recent detection history used for that fraction. Nothing is recorded; results older than this are forgotten. Changing it resets the running baseline."],
+ ["action","Action on Failure","sel",{options:[[0,"Alert only"],[1,"Pause"],[2,"Stop"]]},
+  "Alert only sends the message without touching the printer."],
  ["ai_start_delay","Detection Start Delay (s)","num",{min:0,max:60000,step:10},
-  "Skip this many seconds at the start of a print, while the first layer goes down."]],
+  "Skip this many seconds at the start of a print, while the first layer goes down."],
+ ["print_layout_threshold","Display Score Threshold","num",{min:0,max:1,step:0.05},
+  "How much of the frame may already be print before a detection there is discounted."]],
 performance:[
- ["cpu_share","CPU Cores Used","sel",
-  {options:[[0.25,"25%"],[0.5,"50%"],[0.75,"75%"],[1,"100%"]]},
-  "Share of the performance cores the detector may use. Extra cores buy less than their count suggests on these boards: 2 to 4 measured +15% on an A55."],
+ ["cpu_share","CPU Cores Used","sel",{options:[[0.25,"25%"],[0.5,"50%"],[0.75,"75%"],[1,"100%"]]},
+  "Share of the performance cores the detector may use. Extra cores buy less than their count suggests here: 2 to 4 measured +15% on an A55."],
  ["frame_sample_interval","Frame Sampling Interval (ms)","num",{min:10,max:1000,step:10},
   "How often the detection loop takes a frame."],
  ["detection_interval","Minimum Check Interval (s)","num",{min:0,max:3600,step:1},
@@ -223,239 +394,291 @@ performance:[
  ["frame_buffer_max_age","Maximum Candidate Age (s)","num",{min:4,max:16,step:1},""],
  ["frame_buffer_capacity","Candidate Frame Capacity","num",{min:4,max:16,step:1},""]],
 notify:[
- ["max_notification","Maximum Alerts per Print","num",{min:0,max:60000,step:1},
-  "0 means unlimited."],
+ ["max_notification","Maximum Alerts per Print","num",{min:0,max:60000,step:1},"0 means unlimited."],
  ["notify_interval","Minimum Alert Interval (s)","num",{min:0,max:3600,step:1},
   "Alerts suppressed by this are dropped, not queued."],
- ["telegram_enabled","Enable Telegram","check",{},""],
- ["telegram_token","Telegram Bot Token","text",{secret:true},""],
- ["telegram_chat_id","Telegram Chat ID","text",{secret:true},""],
- ["discord_enabled","Enable Discord","check",{},""],
- ["discord_bot_token","Discord Bot Token","text",{secret:true},""],
- ["discord_channel_id","Discord Channel ID","text",{secret:true},""]],
+ ["telegram_enabled","Telegram","state",{},
+  "Monitoring: send /hi or press Check for the current camera view. Alerts: a detected failure sends the analysed frame with its boxes."],
+ ["discord_enabled","Discord","state",{},
+  "Monitoring: send !check or press Check for the current camera view. Alerts: a detected failure sends the analysed frame with its boxes."]],
 camera:[
  ["snapshot_url","Custom camera URL","text",{},
   "Leave empty to use the camera Moonraker knows about, or Klipper's /webcam/ path."]]};
 
-let cur = {}, maskCells = null, editing = false, painting = false,
-    paintTo = true, brush = 2, undoStack = [];
+let cur={}, mask=null, undoStack=[], redoStack=[], brush=2,
+    tool="brush", painting=false, rectFrom=null;
 
-const msg = (t,ms=2600) => { $("msg").textContent = t;
-  if(ms) setTimeout(()=>{ if($("msg").textContent===t) $("msg").textContent=""; },ms); };
+const msg=(t,ms=2600)=>{$("msg").textContent=t;
+  if(ms)setTimeout(()=>{if($("msg").textContent===t)$("msg").textContent="";},ms);};
 
+/* ---------- dialogs ---------- */
+function open(id){ $(id).classList.add("open"); }
+function close(id){ $(id).classList.remove("open"); }
+document.querySelectorAll("[data-close]").forEach(b =>
+  b.onclick = () => b.closest(".backdrop").classList.remove("open"));
+document.querySelectorAll(".backdrop").forEach(b =>
+  b.onclick = e => { if(e.target===b) b.classList.remove("open"); });
+document.addEventListener("keydown", e => {
+  if(e.key==="Escape") document.querySelectorAll(".backdrop.open")
+    .forEach(b=>b.classList.remove("open"));
+});
+
+/* ---------- settings ---------- */
 function build(){
   for(const pane in FIELDS){
-    const host = $("p-"+pane); host.innerHTML = "";
+    const host=$("p-"+pane);
+    host.querySelectorAll(".f").forEach(e=>e.remove());
     for(const [key,label,kind,opt,help] of FIELDS[pane]){
-      const row = document.createElement("div"); row.className = "f";
       let ctl;
-      if(kind==="check"){ ctl = `<input type="checkbox" id="f-${key}">`; }
-      else if(kind==="sel"){
-        ctl = `<select id="f-${key}">` + opt.options.map(
-          ([v,t])=>`<option value="${v}">${t}</option>`).join("") + `</select>`; }
-      else if(kind==="level"){
-        ctl = `<span style="display:flex;align-items:center;gap:8px">
-               <input type="range" id="f-__level" min="1" max="5" step="1">
-               <b id="lvlname" style="min-width:62px;font-size:12px"></b></span>`; }
-      else if(kind==="text"){
-        ctl = `<input type="${opt.secret?"password":"text"}" id="f-${key}">`; }
-      else { ctl = `<input type="number" id="f-${key}" min="${opt.min}" max="${opt.max}" step="${opt.step}">`; }
-      row.innerHTML = `<div class="f-top"><label for="f-${key}">${label}</label>
-        <span style="display:flex;align-items:center;gap:8px">${ctl}
-        ${help?'<span class="q">?</span>':''}</span></div>
+      if(kind==="check") ctl=`<input type="checkbox" id="f-${key}">`;
+      else if(kind==="sel") ctl=`<select id="f-${key}">`+opt.options.map(
+        ([v,t])=>`<option value="${v}">${t}</option>`).join("")+`</select>`;
+      else if(kind==="level") ctl=`<span style="display:flex;align-items:center;gap:9px">
+        <input type="range" id="f-__level" min="1" max="5" step="1">
+        <b id="lvlname" style="min-width:64px;font-size:12px"></b></span>`;
+      else if(kind==="state") ctl=`<b id="f-${key}" class="statechip">--</b>`;
+      else if(kind==="text") ctl=`<input type="text" id="f-${key}">`;
+      else ctl=`<input type="number" id="f-${key}" min="${opt.min}" max="${opt.max}" step="${opt.step}">`;
+      const row=document.createElement("div"); row.className="f";
+      row.innerHTML=`<div class="f-top"><label for="f-${key}">${label}</label>
+        <span style="display:flex;align-items:center;gap:9px">${ctl}
+        ${help?'<span class="q" title="Explain this">?</span>':''}</span></div>
         ${help?`<div class="help">${help}</div>`:''}`;
       host.appendChild(row);
-      if(help) row.querySelector(".q").onclick = () => row.classList.toggle("open");
+      if(help) row.querySelector(".q").onclick=()=>row.classList.toggle("open");
     }
   }
-  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
     document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("on"));
     document.querySelectorAll(".pane").forEach(x=>x.classList.remove("on"));
-    b.classList.add("on"); $("p-"+b.dataset.p).classList.add("on");
-  });
-  const lvl = $("f-__level");
-  if(lvl) lvl.oninput = () => applyLevel(+lvl.value);
-  for(const k of ["scores_threshold","img_sensitivity","failure_ratio"]){
-    const el = $("f-"+k); if(el) el.addEventListener("input", matchLevel);
-  }
+    b.classList.add("on"); $("p-"+b.dataset.p).classList.add("on");});
+  $("f-__level").oninput=()=>applyLevel(+$("f-__level").value);
+  for(const k of ["scores_threshold","img_sensitivity","failure_ratio"])
+    $("f-"+k).addEventListener("input", matchLevel);
+  $("w-level").oninput=()=>{$("w-levelname").textContent=LEVEL_NAMES[+$("w-level").value];};
 }
-
-function applyLevel(n){
-  if(!LEVELS[n]) return;
-  for(const k in LEVELS[n]) if($("f-"+k)) $("f-"+k).value = LEVELS[n][k];
-  $("lvlname").textContent = LEVEL_NAMES[n];
-}
+function applyLevel(n){ if(!LEVELS[n])return;
+  for(const k in LEVELS[n]) $("f-"+k).value=LEVELS[n][k];
+  $("lvlname").textContent=LEVEL_NAMES[n]; }
 function matchLevel(){
-  for(let n=1;n<LEVELS.length;n++){
-    if(Object.keys(LEVELS[n]).every(k =>
-        Math.abs(parseFloat($("f-"+k).value) - LEVELS[n][k]) < 1e-9)){
-      $("f-__level").value = n; $("lvlname").textContent = LEVEL_NAMES[n]; return;
-    }
-  }
-  $("lvlname").textContent = "Custom";
+  for(let n=1;n<LEVELS.length;n++)
+    if(Object.keys(LEVELS[n]).every(k=>Math.abs(parseFloat($("f-"+k).value)-LEVELS[n][k])<1e-9)){
+      $("f-__level").value=n; $("lvlname").textContent=LEVEL_NAMES[n]; return; }
+  $("lvlname").textContent="Custom";
 }
-
 async function load(){
-  cur = await (await fetch("api/settings")).json();
+  cur=await (await fetch("api/settings")).json();
   for(const pane in FIELDS) for(const [key,,kind] of FIELDS[pane]){
-    if(key==="__level") continue;
-    const el = $("f-"+key); if(!el || !(key in cur)) continue;
-    if(kind==="check") el.checked = !!cur[key]; else el.value = cur[key];
+    if(key==="__level")continue;
+    const el=$("f-"+key); if(!el||!(key in cur))continue;
+    if(kind==="check") el.checked=!!cur[key];
+    else if(kind==="state"){ el.textContent=cur[key]?"configured":"not set";
+      el.classList.toggle("on",!!cur[key]); }
+    else el.value=cur[key];
   }
   matchLevel();
-  maskCells = decodeMask(cur.mask_image_data || "");
-  drawMask(); updateMaskMeta();
+  mask=decodeMask(cur.mask_image_data||""); updateMeta();
 }
 async function save(){
-  const body = {};
+  const body={};
   for(const pane in FIELDS) for(const [key,,kind] of FIELDS[pane]){
-    if(key==="__level") continue;
-    const el = $("f-"+key); if(!el) continue;
-    if(kind==="check") body[key] = el.checked;
-    else if(kind==="text") body[key] = el.value;
-    else body[key] = parseFloat(el.value);
+    if(key==="__level")continue;
+    const el=$("f-"+key); if(!el)continue;
+    if(kind==="state") continue;        // read-only, see the note above
+    else if(kind==="check") body[key]=el.checked;
+    else if(kind==="text") body[key]=el.value;
+    else body[key]=parseFloat(el.value);
   }
-  const r = await fetch("api/settings",{method:"POST",
-      headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const d = await r.json().catch(()=>({}));
-  msg(r.ok ? "Saved." : ("Save failed: " + (d.error||r.status)), 4000);
+  const r=await fetch("api/settings",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){ msg("Saved."); setTimeout(()=>close("d-settings"),700); }
+  else msg("Save failed: "+(d.error||r.status),5000);
 }
 
-// ---- mask ----
+/* ---------- mask ---------- */
 function decodeMask(s){
-  const out = Array.from({length:GRID},()=>new Array(GRID).fill(false));
-  if(!s) return out;
-  const n = Math.round(Math.sqrt(s.length));
-  if(n*n !== s.length) return out;
-  for(let r=0;r<GRID;r++) for(let c=0;c<GRID;c++)
-    out[r][c] = s[((r*n/GRID)|0)*n + ((c*n/GRID)|0)] === "1";
-  return out;
+  const o=Array.from({length:GRID},()=>new Array(GRID).fill(false));
+  if(!s)return o;
+  const n=Math.round(Math.sqrt(s.length)); if(n*n!==s.length)return o;
+  for(let r=0;r<GRID;r++)for(let c=0;c<GRID;c++)
+    o[r][c]=s[((r*n/GRID)|0)*n+((c*n/GRID)|0)]==="1";
+  return o;
 }
-const encodeMask = m => m.map(r=>r.map(v=>v?"1":"0").join("")).join("");
-const countMask = () => maskCells ? maskCells.flat().filter(Boolean).length : 0;
-const updateMaskMeta = () => { $("maskmeta").textContent =
-  countMask() ? countMask()+" / "+(GRID*GRID)+" cells ignored" : "No zone set."; };
+const encodeMask=m=>m.map(r=>r.map(v=>v?"1":"0").join("")).join("");
+const count=()=>mask?mask.flat().filter(Boolean).length:0;
+const updateMeta=()=>{$("maskmeta").textContent=count()
+  ? count()+" of "+(GRID*GRID)+" cells ignored" : "No zone set.";};
+function snapshotMask(){ undoStack.push(mask.map(r=>r.slice()));
+  if(undoStack.length>30)undoStack.shift(); redoStack=[]; }
 
-function drawMask(){
-  const cv = $("maskcv"), img = $("view");
-  if(!maskCells || !img.clientWidth) return;
-  cv.width = img.clientWidth; cv.height = img.clientHeight;
-  const ctx = cv.getContext("2d");
-  ctx.clearRect(0,0,cv.width,cv.height);
-  const cw = cv.width/GRID, ch = cv.height/GRID;
-  ctx.fillStyle = editing ? "rgba(255,82,82,.45)" : "rgba(0,0,0,.78)";
-  for(let r=0;r<GRID;r++){
-    let c=0;
-    while(c<GRID){
-      if(!maskCells[r][c]){ c++; continue; }
-      const s=c; while(c<GRID && maskCells[r][c]) c++;
-      ctx.fillRect(s*cw, r*ch, (c-s)*cw, ch+.5);
-    }
-  }
+function drawMask(cv,img,editing){
+  if(!mask||!img.clientWidth)return;
+  cv.width=img.clientWidth; cv.height=img.clientHeight;
+  const x=cv.getContext("2d"); x.clearRect(0,0,cv.width,cv.height);
+  const cw=cv.width/GRID, ch=cv.height/GRID;
+  x.fillStyle=editing?"rgba(255,82,82,.45)":"rgba(0,0,0,.78)";
+  for(let r=0;r<GRID;r++){ let c=0;
+    while(c<GRID){ if(!mask[r][c]){c++;continue;}
+      const s=c; while(c<GRID&&mask[r][c])c++;
+      x.fillRect(s*cw,r*ch,(c-s)*cw,ch+.5); } }
   if(editing){
-    ctx.strokeStyle="rgba(255,255,255,.13)"; ctx.lineWidth=1; ctx.beginPath();
-    for(let i=8;i<GRID;i+=8){
-      ctx.moveTo(i*cw+.5,0); ctx.lineTo(i*cw+.5,cv.height);
-      ctx.moveTo(0,i*ch+.5); ctx.lineTo(cv.width,i*ch+.5);
-    }
-    ctx.stroke();
+    x.strokeStyle="rgba(255,255,255,.12)"; x.lineWidth=1; x.beginPath();
+    for(let i=8;i<GRID;i+=8){ x.moveTo(i*cw+.5,0); x.lineTo(i*cw+.5,cv.height);
+      x.moveTo(0,i*ch+.5); x.lineTo(cv.width,i*ch+.5); }
+    x.stroke();
   }
 }
-function cellAt(ev){
-  const b = $("maskcv").getBoundingClientRect();
-  const p = ev.touches ? ev.touches[0] : ev;
+const redrawEditor=()=>drawMask($("maskcv"),$("maskimg"),true);
+function cellAt(ev,cv){
+  const b=cv.getBoundingClientRect(), p=ev.touches?ev.touches[0]:ev;
   return [Math.min(GRID-1,Math.max(0,((p.clientY-b.top)/b.height*GRID)|0)),
           Math.min(GRID-1,Math.max(0,((p.clientX-b.left)/b.width*GRID)|0))];
 }
-function paint(ev){
-  if(!editing||!painting) return;
-  ev.preventDefault();
-  const [r,c] = cellAt(ev);
-  for(let dr=-brush;dr<=brush;dr++) for(let dc=-brush;dc<=brush;dc++){
+function paintAt(r,c,val){
+  for(let dr=-brush;dr<=brush;dr++)for(let dc=-brush;dc<=brush;dc++){
     const y=r+dr,x=c+dc;
-    if(y>=0&&y<GRID&&x>=0&&x<GRID) maskCells[y][x]=paintTo;
-  }
-  drawMask();
+    if(y>=0&&y<GRID&&x>=0&&x<GRID)mask[y][x]=val;}
 }
-$("b-mask").onclick = () => {
-  editing = !editing;
-  $("viewwrap").classList.toggle("editing", editing);
-  $("masktools").style.display = editing ? "inline" : "none";
-  $("b-mask").textContent = editing ? "Cancel" : "Undetect zone";
-  // A still frame while painting: a moving picture under the brush makes
-  // it impossible to see what is being covered.
-  $("view").src = (editing ? "snapshot?" : "stream?") + Date.now();
-  setTimeout(drawMask,150);
-};
-$("b-brush-").onclick = () => { brush = Math.max(0,brush-1); msg("Brush "+(brush*2+1)); };
-$("b-brush+").onclick = () => { brush = Math.min(8,brush+1); msg("Brush "+(brush*2+1)); };
-$("b-undo").onclick = () => { if(undoStack.length){ maskCells = undoStack.pop(); drawMask(); updateMaskMeta(); } };
-$("b-clear").onclick = () => { undoStack.push(maskCells.map(r=>r.slice()));
-  maskCells = Array.from({length:GRID},()=>new Array(GRID).fill(false));
-  drawMask(); updateMaskMeta(); };
-$("b-savemask").onclick = async () => {
-  const r = await fetch("api/mask",{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mask_image_data:encodeMask(maskCells)})});
-  msg(r.ok?"Zone saved.":"Save failed."); updateMaskMeta();
-  if(r.ok) $("b-mask").click();
-};
-const cv = $("maskcv");
-for(const [d,m,u] of [["mousedown","mousemove","mouseup"],
-                      ["touchstart","touchmove","touchend"]]){
-  cv.addEventListener(d, e => {
-    if(!editing) return;
-    undoStack.push(maskCells.map(r=>r.slice()));
-    if(undoStack.length>20) undoStack.shift();
-    const [r,c]=cellAt(e); paintTo = !maskCells[r][c];
-    painting = true; paint(e);
-  },{passive:false});
-  cv.addEventListener(m, paint, {passive:false});
-  window.addEventListener(u, () => { if(painting){ painting=false; updateMaskMeta(); } });
+function fillRect(a,b,val){
+  const [r0,r1]=[Math.min(a[0],b[0]),Math.max(a[0],b[0])];
+  const [c0,c1]=[Math.min(a[1],b[1]),Math.max(a[1],b[1])];
+  for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++)mask[r][c]=val;
 }
+function setTool(t){ tool=t;
+  for(const [id,name] of [["t-brush","brush"],["t-erase","erase"],
+      ["t-rect","rect"],["t-rect-erase","rect-erase"]])
+    $(id).classList.toggle("on", name===t); }
+$("t-brush").onclick=()=>setTool("brush");
+$("t-erase").onclick=()=>setTool("erase");
+$("t-rect").onclick=()=>setTool("rect");
+$("t-rect-erase").onclick=()=>setTool("rect-erase");
+const showBrush=()=>{$("brushsize").textContent=(brush*2+1);};
+$("t-smaller").onclick=()=>{brush=Math.max(0,brush-1);showBrush();};
+$("t-larger").onclick=()=>{brush=Math.min(10,brush+1);showBrush();};
+$("t-undo").onclick=()=>{ if(undoStack.length){ redoStack.push(mask.map(r=>r.slice()));
+  mask=undoStack.pop(); redrawEditor(); updateMeta(); } };
+$("t-redo").onclick=()=>{ if(redoStack.length){ undoStack.push(mask.map(r=>r.slice()));
+  mask=redoStack.pop(); redrawEditor(); updateMeta(); } };
+$("t-clear").onclick=()=>{ snapshotMask();
+  mask=Array.from({length:GRID},()=>new Array(GRID).fill(false));
+  redrawEditor(); updateMeta(); };
 
-// ---- status ----
-let recent = [];
+const mcv=$("maskcv");
+function down(e){
+  snapshotMask();
+  const rc=cellAt(e,mcv);
+  if(tool==="rect"||tool==="rect-erase"){ rectFrom=rc; painting=true; return; }
+  painting=true; paintAt(rc[0],rc[1],tool==="brush"); redrawEditor();
+}
+function move(e){
+  if(!painting)return; e.preventDefault();
+  const rc=cellAt(e,mcv);
+  if(rectFrom){ // live preview without committing
+    const saved=mask.map(r=>r.slice());
+    fillRect(rectFrom,rc,tool==="rect");
+    redrawEditor(); mask=saved; return;
+  }
+  paintAt(rc[0],rc[1],tool==="brush"); redrawEditor();
+}
+function up(e){
+  if(!painting)return;
+  if(rectFrom){ const rc=cellAt(e.changedTouches?e.changedTouches[0]:e,mcv);
+    fillRect(rectFrom,rc,tool==="rect"); rectFrom=null; redrawEditor(); }
+  painting=false; updateMeta();
+}
+mcv.addEventListener("mousedown",down); mcv.addEventListener("touchstart",down,{passive:false});
+mcv.addEventListener("mousemove",move); mcv.addEventListener("touchmove",move,{passive:false});
+window.addEventListener("mouseup",up);  window.addEventListener("touchend",up);
+
+$("b-mask").onclick=()=>{
+  // A still frame while painting: a moving picture under the brush makes it
+  // impossible to see what is being covered.
+  $("maskimg").src="snapshot?"+Date.now();
+  open("d-mask"); showBrush(); updateMeta();
+  setTimeout(redrawEditor,150);
+};
+$("b-savemask").onclick=async()=>{
+  const r=await fetch("api/mask",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({mask_image_data:encodeMask(mask)})});
+  if(r.ok){ close("d-mask"); drawMask($("overlay"),$("view"),false);
+    $("overlay").style.display=count()?"block":"none"; }
+};
+$("b-settings").onclick=()=>{ load().then(()=>open("d-settings")); };
+$("b-save").onclick=save;
+$("maskimg").addEventListener("load",redrawEditor);
+
+/* ---------- welcome ---------- */
+async function maybeWelcome(){
+  if(localStorage.getItem("pinozcam-welcomed"))return;
+  try{
+    const s=await (await fetch("api/status")).json();
+    $("w-cam").innerHTML = s.camera_ok
+      ? '<span style="color:var(--ok)">A camera is already configured. PiNozCam will use it.</span>'
+      : 'No camera answered yet. PiNozCam uses whatever Moonraker is set up '
+        + 'to use — add one in Mainsail, or set a URL under Camera in the settings.';
+  }catch(e){ $("w-cam").textContent="Could not reach the service."; }
+  $("w-levelname").textContent=LEVEL_NAMES[3];
+  open("d-welcome");
+}
+$("b-skip").onclick=()=>{localStorage.setItem("pinozcam-welcomed","1");close("d-welcome");};
+$("b-welcome-done").onclick=async()=>{
+  const n=+$("w-level").value, body={action:+$("w-action").value};
+  for(const k in LEVELS[n]) body[k]=LEVELS[n][k];
+  await fetch("api/settings",{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  localStorage.setItem("pinozcam-welcomed","1");
+  close("d-welcome"); load();
+};
+
+/* ---------- status ---------- */
+let recent=[];
 async function poll(){
   try{
-    const d = await (await fetch("api/status")).json();
-    $("c-detect").textContent = d.detecting ? "detecting" : "idle";
-    $("c-detect").className = "chip" + (d.detecting?" on":"");
-    $("c-printer").textContent = d.printer_state || "—";
-    $("c-backend").textContent = d.backend ? d.backend.split(" + ")[0] : "—";
-
-    const ratio = d.ratio || 0, thr = parseFloat($("f-failure_ratio")?.value)||0.05;
-    $("g-val").textContent = (ratio*100).toFixed(0)+"%";
-    $("g-fill").style.width = Math.min(100,ratio*100)+"%";
-    $("g-fill").classList.toggle("alarm", ratio>=thr);
-    $("g-mark").style.left = Math.min(100,thr*100)+"%";
-    $("g-detail").textContent = d.window_frames != null
+    const d=await (await fetch("api/status")).json();
+    const detecting=!!d.detecting, alarming=d.severity>=0.5;
+    $("c-ai").textContent=detecting?"AI running":"AI not started";
+    $("c-ai").className="chip"+(detecting?(alarming?" chip-alarm":""):" chip-off");
+    $("c-backend").textContent=d.backend?d.backend.split(" + ")[0]:"backend --";
+    $("c-backend").className="chip"+(d.backend?"":" chip-off");
+    for(const [chip,txt,on] of [["c-tg","c-tg-t",d.telegram],["c-dc","c-dc-t",d.discord]]){
+      $(txt).textContent=on?"on":"not set";
+      $(chip).className="chip"+(on?"":" chip-off");
+    }
+    const ratio=d.ratio||0, thr=parseFloat(cur.failure_ratio)||0.05;
+    $("g-val").textContent=d.window_frames?((ratio*100).toFixed(0)+"%"):"no data yet";
+    $("g-fill").style.width=Math.min(100,ratio/Math.max(thr,0.01)*100)+"%";
+    $("g-fill").classList.toggle("alarm",ratio>=thr);
+    $("g-mark").style.left="100%";
+    $("g-detail").textContent=d.window_frames!=null
       ? `${d.alarming||0} of ${d.window_frames} frames alarming`
-        + (d.armed===false ? " — warming up" : "")
-      : "—";
-    $("s-sev").textContent = d.severity!=null ? d.severity.toFixed(3) : "—";
-    $("s-ms").textContent  = d.model_ms!=null ? d.model_ms.toFixed(0)+" ms" : "—";
-    $("s-rate").textContent= d.model_ms ? (60000/d.model_ms).toFixed(0) : "—";
-    $("c-detect").classList.toggle("alarm", d.severity>=0.5);
+        +(d.armed===false?" — warming up":"") : "";
+    $("ai-detail").textContent=d.printer_state?("Printer: "+d.printer_state):"";
+    $("s-frames").textContent=d.window_frames??"—";
+    $("s-alarm").textContent=d.alarming??"—";
+    $("s-sev").textContent=d.severity!=null?d.severity.toFixed(3):"—";
+    $("s-ms").textContent=d.model_ms!=null?d.model_ms.toFixed(0)+" ms":"—";
+    $("s-rate").textContent=d.model_ms?(60000/d.model_ms).toFixed(0):"—";
+    $("err").style.display=d.error?"block":"none";
+    if(d.error)$("err").textContent=d.error;
+    if(d.version)$("ver").textContent="PiNozCam for Moonraker "+d.version;
 
-    if(d.severity>=0.5){
-      const t = new Date().toLocaleTimeString();
-      if(!recent.length || recent[0].sev!==d.severity){
-        recent.unshift({t, sev:d.severity}); recent = recent.slice(0,5);
-        $("recent").innerHTML = recent.map(
-          r=>`<div><span>${r.t}</span><span class="sev">${r.sev.toFixed(3)}</span></div>`).join("");
+    if(alarming){
+      const t=new Date().toLocaleTimeString();
+      if(!recent.length||recent[0].sev!==d.severity){
+        recent.unshift({t,sev:d.severity}); recent=recent.slice(0,5);
+        $("recent").innerHTML=recent.map(r=>
+          `<div><span>${r.t}</span><span class="sev">${r.sev.toFixed(3)}</span></div>`).join("");
       }
     }
-  }catch(e){ $("c-detect").textContent = "offline"; $("c-detect").className="chip"; }
+  }catch(e){ $("c-ai").textContent="offline"; $("c-ai").className="chip chip-off"; }
 }
 
-build(); load(); poll(); setInterval(poll,2000);
-fetch("api/status").then(r=>r.json()).then(d=>{
-  if(d.version) $("ver").textContent = "PiNozCam for Moonraker " + d.version;
-}).catch(()=>{});
-$("b-save").onclick = save;
-$("b-reload").onclick = () => { load(); msg("Reloaded."); };
-window.addEventListener("resize", drawMask);
-$("view").addEventListener("load", drawMask);
-$("view").src = "stream?"+Date.now();
+build(); load().then(maybeWelcome); poll(); setInterval(poll,2000);
+window.addEventListener("resize",()=>{ drawMask($("overlay"),$("view"),false);
+  if($("d-mask").classList.contains("open"))redrawEditor(); });
+$("view").addEventListener("load",()=>{ drawMask($("overlay"),$("view"),false);
+  $("overlay").style.display=count()?"block":"none"; });
+$("view").src="stream?"+Date.now();
 </script>

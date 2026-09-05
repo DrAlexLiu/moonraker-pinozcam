@@ -53,6 +53,11 @@ class FrameHolder(object):
         self._fallback = fallback      # () -> jpeg bytes or None
         self._fallback_jpeg = None
         self._fallback_at = 0.0
+        # None until something has been tried; then True for a real frame
+        # and False for the NO SIGNAL placeholder. The page asks for this,
+        # and comparing bytes against a freshly drawn placeholder would be
+        # both wasteful and fragile.
+        self.camera_ok = None
 
     def publish(self, jpeg_bytes):
         with self._cv:
@@ -85,6 +90,7 @@ class FrameHolder(object):
         if jpeg:
             self._fallback_jpeg = jpeg
             self._fallback_at = now
+            self.camera_ok = True
             return self._fallback_jpeg
         # Camera unreachable. Show NO SIGNAL rather than a blank element or
         # a stale frame from minutes ago -- a user tuning a mask needs to
@@ -92,6 +98,7 @@ class FrameHolder(object):
         from .placeholder import no_signal_jpeg
         self._fallback_jpeg = no_signal_jpeg()
         self._fallback_at = now
+        self.camera_ok = False
         return self._fallback_jpeg
 
     def wait_newer(self, last_seq, timeout):
@@ -273,21 +280,47 @@ class AnnotatedView(object):
     # this listens on 0.0.0.0, so the set is deliberately narrow and holds
     # no credentials.
     EDITABLE = {
+        "enable_ai": (bool, 0, 1),
         "scores_threshold": (float, 0.0, 1.0),
         "img_sensitivity": (float, 1e-4, 1.0),
         "failure_ratio": (float, 0.01, 1.0),
         "count_time": (int, 10, 3600),
         "ai_start_delay": (int, 0, 60000),
+        "detection_interval": (int, 0, 3600),
+        "print_layout_threshold": (float, 0.0, 1.0),
+        "frame_sample_interval": (int, 10, 1000),
+        "frame_buffer_max_age": (int, 4, 16),
+        "frame_buffer_capacity": (int, 4, 16),
         "cpu_share": (float, 0.01, 1.0),
         "action": (int, 0, 2),
     }
 
-    def __init__(self, config, client, logger, detector_ref=None):
+    # Written to [camera] rather than [detection].
+    EDITABLE_CAMERA = {
+        "snapshot_url": (str, 0, 0),
+    }
+
+    # Written to [notification].
+    EDITABLE_NOTIFY = {
+        "max_notification": (int, 0, 60000),
+        "notify_interval": (int, 0, 3600),
+    }
+
+    # ⚠️ Bot tokens are deliberately NOT in any of the three sets above.
+    # This server has no login and binds 0.0.0.0, so anything it will
+    # hand back is readable by everyone on the network. The page shows
+    # whether a channel is configured and never what it is configured
+    # with; credentials are edited in the config file, which is what the
+    # file's ownership already protects.
+
+    def __init__(self, config, client, logger, detector_ref=None,
+                 notifier=None):
         self._config = config
         self._cfg = config.web
         self._client = client
         self._log = logger
         self._detector_ref = detector_ref
+        self._notifier = notifier
         self.frames = FrameHolder(fallback=self._live_camera_jpeg)
         self._camera_source = None
         self._stopping = threading.Event()
@@ -319,6 +352,18 @@ class AnnotatedView(object):
             self._camera_source = None      # re-resolve next time
         return None
 
+    def _camera_reachable(self):
+        """Whether the last frame served was a real one.
+
+        Reads what the frame holder already recorded rather than probing:
+        the welcome page asks this on load, and a probe there would block
+        the page for as long as an unplugged camera takes to time out.
+        None means nothing has been fetched yet.
+        """
+        if self.frames.camera_ok is None and self._camera_source is not None:
+            return True         # resolved a camera, just no frame served yet
+        return self.frames.camera_ok
+
     @property
     def enabled(self):
         return int(self._cfg.get("port") or 0) > 0
@@ -332,29 +377,66 @@ class AnnotatedView(object):
     def read_settings(self):
         detection = self._config.detection
         out = {k: detection[k] for k in self.EDITABLE if k in detection}
-        out["mask_image_data"] = self._config.camera.get(
-            "mask_image_data") or ""
+        # detection[] holds seconds; the page and the config file both use
+        # milliseconds, which is the OctoPrint schema's own convention.
+        if "frame_sample_interval" in out:
+            out["frame_sample_interval"] = int(
+                round(out["frame_sample_interval"] * 1000))
+        camera = self._config.camera
+        out["snapshot_url"] = camera.get("snapshot_url") or ""
+        out["mask_image_data"] = camera.get("mask_image_data") or ""
+        notification = self._config.notification
+        for key in self.EDITABLE_NOTIFY:
+            if key in notification:
+                out[key] = notification[key]
+        # Configured-or-not, never the value. See EDITABLE_CAMERA above.
+        telegram = self._config.get_section("telegram")
+        discord = self._config.get_section("discord")
+        out["telegram_enabled"] = bool(
+            telegram.get("enabled") and telegram.get("token"))
+        out["discord_enabled"] = bool(
+            discord.get("enabled") and discord.get("bot_token"))
         return out
 
+    @staticmethod
+    def _cast(key, value, spec):
+        """Range-check one incoming setting, or raise ValueError."""
+        caster, low, high = spec
+        if caster is str:
+            return str(value).strip()
+        if caster is bool:
+            return "true" if value in (True, 1, "1", "true", "on") else "false"
+        try:
+            number = caster(value)
+        except (TypeError, ValueError):
+            raise ValueError("%s is not a number" % key)
+        if not low <= number <= high:
+            raise ValueError("%s must be between %s and %s"
+                             % (key, low, high))
+        return number
+
     def save_settings(self, payload):
-        """Validate and write settings back to the config file."""
-        updates = {}
-        for key, value in (payload or {}).items():
-            if key not in self.EDITABLE:
-                continue                    # ignore rather than fail
-            caster, low, high = self.EDITABLE[key]
-            try:
-                number = caster(value)
-            except (TypeError, ValueError):
-                raise ValueError("%s is not a number" % key)
-            if not low <= number <= high:
-                raise ValueError("%s must be between %s and %s"
-                                 % (key, low, high))
-            updates[key] = number
-        if updates:
-            self._config.write_options("detection", updates)
+        """Validate and write settings back to the config file.
+
+        Unknown keys are ignored rather than rejected: the page posts one
+        blob for every tab, and a build of the page newer than the service
+        should still be able to save the settings this service knows.
+        """
+        sections = (("detection", self.EDITABLE),
+                    ("camera", self.EDITABLE_CAMERA),
+                    ("notification", self.EDITABLE_NOTIFY))
+        written = []
+        for section, allowed in sections:
+            updates = {}
+            for key, value in (payload or {}).items():
+                if key in allowed:
+                    updates[key] = self._cast(key, value, allowed[key])
+            if updates:
+                self._config.write_options(section, updates)
+                written.extend(updates)
+        if written:
             self._log.info("Settings updated from the web page: %s",
-                           ", ".join(sorted(updates)))
+                           ", ".join(sorted(written)))
 
     def save_mask(self, data):
         data = "".join(ch for ch in (data or "") if ch in "01")
@@ -370,10 +452,19 @@ class AnnotatedView(object):
     def read_status(self):
         detector = self._detector_ref[0] if self._detector_ref else None
         state = self._client.state
+        notifier = self._notifier
         out = {
             "printer_state": state.state,
             "detecting": bool(detector and detector.running),
             "version": __import__("moonraker_pinozcam").__version__,
+            # Live objects, not config flags: a channel whose credentials
+            # were rejected is configured but not connected, and that is
+            # exactly the state a user needs to see.
+            "telegram": bool(notifier is not None
+                             and notifier.telegram is not None),
+            "discord": bool(notifier is not None
+                            and notifier.discord is not None),
+            "camera_ok": self._camera_reachable(),
         }
         if detector is not None:
             stats = detector.window.stats

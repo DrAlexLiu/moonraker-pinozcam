@@ -20,6 +20,12 @@ SUBSCRIBE = {
     "virtual_sdcard": ["is_active", "progress"],
     "pause_resume": ["is_paused"],
     "webhooks": ["state", "state_message"],
+    # Only for the /check reply, which quotes the same six lines the
+    # OctoPrint build's check_reply() does. Temperature changes constantly
+    # during a print, so only the current reading is subscribed -- not the
+    # target, and not the power.
+    "extruder": ["temperature"],
+    "heater_bed": ["temperature"],
 }
 
 # Reconnect backoff. Moonraker restarts whenever the user saves a config
@@ -45,6 +51,9 @@ class PrinterState(object):
         self.is_paused = False
         self.klippy_state = "unknown"
         self.updated_at = 0.0
+        self.progress = 0.0         # 0.0-1.0, from virtual_sdcard
+        self.nozzle_temp = None     # None until Klippy reports one
+        self.bed_temp = None
 
     @property
     def is_printing(self):
@@ -79,6 +88,7 @@ class MoonrakerClient(object):
 
         self.state = PrinterState()
         self.connected = False
+        self._printer_name = None
 
         self._ws = None
         self._thread = None
@@ -260,6 +270,19 @@ class MoonrakerClient(object):
         if "is_paused" in pr and pr["is_paused"] != self.state.is_paused:
             self.state.is_paused, changed = bool(pr["is_paused"]), True
 
+        vs = status.get("virtual_sdcard") or {}
+        if "progress" in vs:
+            self.state.progress = float(vs["progress"] or 0.0)
+
+        # Temperatures do not mark the state as changed: they move every
+        # second, and _emit() starts and stops the detector.
+        ex = status.get("extruder") or {}
+        if "temperature" in ex:
+            self.state.nozzle_temp = ex["temperature"]
+        hb = status.get("heater_bed") or {}
+        if "temperature" in hb:
+            self.state.bed_temp = hb["temperature"]
+
         wh = status.get("webhooks") or {}
         if "state" in wh and wh["state"] != self.state.klippy_state:
             self.state.klippy_state, changed = wh["state"], True
@@ -276,6 +299,65 @@ class MoonrakerClient(object):
             self._on_state_change(self.state)
         except Exception as exc:                             # noqa: BLE001
             self._log("error", "state-change handler raised: %s", exc)
+
+    # ---- identity -----------------------------------------------------
+
+    def _db_item(self, namespace, key=None):
+        """Read one Moonraker database entry, or None."""
+        params = {"namespace": namespace}
+        if key:
+            params["key"] = key
+        try:
+            r = self._session.get("%s/server/database/item" % self.http_base,
+                                  params=params, timeout=(3.0, 6.0))
+            if r.status_code == 200:
+                return (r.json().get("result") or {}).get("value")
+        except (requests.RequestException, ValueError):
+            pass
+        return None
+
+    def printer_name(self):
+        """A label for this printer, mirroring the OctoPrint build.
+
+        There is no Klipper-native display name, so this walks the same
+        ladder OctoPrint's printer_label() does, most specific first:
+
+          1. what the user typed in Mainsail or Fluidd -- the true analogue
+             of OctoPrint's appearance.name, and stored in Moonraker's own
+             database rather than anywhere in Klipper;
+          2. the hostname, which every install has;
+          3. `printer-<instance_id[:8]>`, the same shape OctoPrint falls
+             back to. Moonraker mints instance_id once and keeps it in its
+             database, so it survives restarts and reinstalls of this
+             service -- it is the closest thing Klipper has to a printer id.
+
+        Cached: it is quoted in every alert caption and none of these three
+        change while the process runs.
+        """
+        if self._printer_name is not None:
+            return self._printer_name
+        name = self._db_item("mainsail", "general.printername")
+        if not name:
+            name = self._db_item("fluidd", "uiSettings.general.instanceName")
+        if not name:
+            try:
+                r = self._session.get("%s/printer/info" % self.http_base,
+                                      timeout=(3.0, 6.0))
+                if r.status_code == 200:
+                    name = (r.json().get("result") or {}).get("hostname")
+            except (requests.RequestException, ValueError):
+                name = None
+        if not name:
+            instance = self._db_item("moonraker", "instance_id")
+            if instance:
+                name = "printer-%s" % str(instance)[:8]
+        name = str(name).strip() if name else ""
+        # Not cached when empty: this can be called before Moonraker is up,
+        # and caching "" then would keep the printer nameless for the life
+        # of the process.
+        if name:
+            self._printer_name = name
+        return name or "printer"
 
     # ---- REST ---------------------------------------------------------
 

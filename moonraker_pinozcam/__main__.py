@@ -7,7 +7,6 @@ inference code depends on it.
 """
 
 import argparse
-import io
 import logging
 import logging.handlers
 import os
@@ -75,20 +74,45 @@ def main(argv=None):
     action = (cfg.action["on_failure"] or "pause").lower()
 
     def latest_jpeg():
-        """A fresh frame for /check, or None if detection is not running."""
-        d = detector_ref[0]
-        return d.last_jpeg if d is not None else None
+        """A frame for /check -- the annotated one if there is one.
+
+        ⚠️ This must NOT return None when detection is idle. Check is the
+        command a user presses BETWEEN prints ("what does the printer look
+        like right now"), and the detector only produces frames while a job
+        is running. The annotated view already resolves this exactly the
+        way the OctoPrint build's check_reply() does -- last analysed frame,
+        else a live camera fetch, else the NO SIGNAL placeholder -- so ask
+        it rather than reaching into the detector.
+        """
+        jpeg, _ = view.frames.latest()
+        return jpeg
 
     def status_line():
+        """The /check caption, in the OctoPrint build's six-line shape."""
         st = client.state
+        lines = ["Printer: %s" % (cfg.get("printer", "name", "")
+                                  or client.printer_name()),
+                 "Status: %s%s" % (st.state,
+                                   " (paused)" if st.is_paused else "")]
+        if st.state in ("printing", "paused"):
+            lines.append("Progress: %.0f%%" % (st.progress * 100))
+        if st.nozzle_temp is not None:
+            lines.append("Nozzle Temp: %.1f°C" % st.nozzle_temp)
+        if st.bed_temp is not None:
+            lines.append("Bed Temp: %.1f°C" % st.bed_temp)
+        if st.filename:
+            lines.append("File: %s" % st.filename)
+
         d = detector_ref[0]
         if d is None or not d.running:
-            return "Not detecting. Printer: %s" % st.state
-        w = d.window.stats
-        return ("Detecting. Printer: %s | window %d frames, %d alarming "
-                "(%.0f%%)%s" % (st.state, w["window_frames"], w["alarming"],
-                                w["ratio"] * 100,
-                                "" if w["armed"] else " | warming up"))
+            lines.append("AI: not detecting")
+        else:
+            w = d.window.stats
+            lines.append("AI: %d frames, %d alarming (%.0f%%)%s"
+                         % (w["window_frames"], w["alarming"],
+                            w["ratio"] * 100,
+                            "" if w["armed"] else ", warming up"))
+        return "\n".join(lines)
 
     detector_ref = [None]
     notifier = Notifier(cfg, client, LOG,
@@ -109,8 +133,7 @@ def main(argv=None):
                    % (result.get("ratio", 0) * 100, cfg.detection["count_time"]))
         try:
             jpeg = latest_jpeg()
-            notifier.alert(caption,
-                           image=io.BytesIO(jpeg) if jpeg else None)
+            notifier.alert(caption, image=jpeg)
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not send the alert: %s", exc)
 
@@ -127,7 +150,8 @@ def main(argv=None):
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not %s the print: %s", action, exc)
 
-    view = AnnotatedView(cfg, client, LOG, detector_ref=detector_ref)
+    view = AnnotatedView(cfg, client, LOG, detector_ref=detector_ref,
+                         notifier=notifier)
     detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view)
     detector_ref[0] = detector
 
