@@ -1,0 +1,11 @@
+# Lets Moonraker (and therefore Mainsail/Fluidd) update PiNozCam.
+# install.sh appends this to moonraker.conf automatically.
+[update_manager moonraker-pinozcam]
+type: git_repo
+path: ~/moonraker-pinozcam
+origin: https://github.com/DrAlexLiu/moonraker-pinozcam.git
+env: ~/moonraker-pinozcam-env/bin/python
+requirements: requirements.txt
+install_script: install.sh
+managed_services:
+  moonraker-pinozcam

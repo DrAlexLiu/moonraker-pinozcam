@@ -1,0 +1,49 @@
+# PiNozCam for Moonraker -- sample configuration.
+#
+# Copy to ~/printer_data/config/moonraker-pinozcam.cfg and edit.
+# Mainsail and Fluidd can edit this file directly in the browser
+# (Machine -> Configuration Files); no SSH needed.
+
+[moonraker]
+host = 127.0.0.1
+port = 7125
+# api_key =        # only if Moonraker's authorization is enabled
+
+[camera]
+# Snapshot URL. On a stock Klipper install crowsnest serves this.
+snapshot_url = http://127.0.0.1:8080/?action=snapshot
+# rotate = 0       # 0/90/180/270
+# flip_h = false
+# flip_v = false
+
+[detection]
+# Confidence a box needs before it counts. Higher = fewer, surer alarms.
+score_threshold = 0.87
+# Area sensitivity: severity = affected_area / sensitivity, clamped to [0,1].
+sensitivity = 0.04
+# Fraction of frames in the window that must alarm before acting.
+failure_ratio = 0.30
+# Sliding window length, seconds.
+count_time = 300
+# Skip the first N seconds of a print (bed adhesion looks odd early on).
+start_delay = 60
+# Percentage of performance cores the detector may use: 50, 75 or 100.
+cpu_percent = 50
+
+[action]
+# What to do when a failure is confirmed: none | pause | stop
+on_failure = pause
+
+[telegram]
+# enabled = false
+# token =
+# chat_id =
+
+[discord]
+# enabled = false
+# bot_token =
+# channel_id =
+
+[logging]
+# path = ~/printer_data/logs/moonraker-pinozcam.log
+# level = INFO

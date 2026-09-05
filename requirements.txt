@@ -1,0 +1,5 @@
+# Kept deliberately small: this runs on printer hosts with as little as
+# 512 MB of RAM, alongside Klipper, Moonraker and a camera streamer.
+Pillow>=9.0.0
+requests>=2.25.0
+websocket-client>=1.2.0
