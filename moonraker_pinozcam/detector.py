@@ -9,21 +9,27 @@ what gcode streaming also needs.
 
 import threading
 import time
+from io import BytesIO
 
-from . import annotate, camera, cpu_affinity, framesource, mask, nozcam_backend
+from PIL import Image
+
+from . import (annotate, camera, cpu_affinity, framebuffer, framesource, mask,
+               nozcam_backend)
 from .window import FailureWindow
 
-# One tick of the loop. It is independent of the frame source's own rate: a source may produce
-# faster, and wait_next()'s sequence argument makes the loop skip what it
-# missed rather than fall behind.
 # Sampling cadence comes from frame_sample_interval; see Detector._refresh.
 
 # How long to wait for a frame before calling the camera missing.
 FRAME_WAIT = 5.0
 CAMERA_OFFLINE_AFTER = 30.0
 
-# A frame alarms at severity >= 0.5, i.e. affected area >= 2% of the
-# content rect at the default 0.04 sensitivity.
+# How long the consumer waits for a candidate. An empty buffer means "the
+# next frame is on its way", never "fetch one yourself" -- the sampler is
+# the only camera reader.
+CONSUMER_WAIT = 1.0
+
+# The centre crop sharpness is measured on, from the OctoPrint build.
+SHARPNESS_CROP = (512, 512)
 
 
 class Detector(object):
@@ -67,6 +73,9 @@ class Detector(object):
         self._backend = None
         self._fired = False                # one episode, not one per frame
         self._paused_by_switch = False
+        self._buffer = None
+        self._buffer_max_age = None
+        self._last_sampled_jpeg = None
         self.last_result = None
         # The one line worth putting in front of the user when detection is
         # not working. Setup failure used to be logged and nothing else, so
@@ -124,6 +133,12 @@ class Detector(object):
         self.camera_source = src
         self._source = camera.build_frame_source(src, logger=self._log)
         self._source.start()
+
+        d = self._cfg.detection
+        self._buffer_max_age = d["frame_buffer_max_age"]
+        self._buffer = framebuffer.FrameBuffer(
+            capacity=d["frame_buffer_capacity"],
+            max_age=d["frame_buffer_max_age"])
 
         self._backend = nozcam_backend.NozcamBackend(
             plugin_dir=None, logger=self._log, backend=self._ai_backend)
@@ -184,9 +199,17 @@ class Detector(object):
                 return
 
         self._log.info("Detecting")
-        last_seq = -1
         self.camera_ok_at = time.monotonic()
         self.camera_alerted = False
+
+        # ⚠️ The sampler is the ONLY camera reader. This loop takes the
+        # best candidate it has offered. Before this the loop read frames
+        # itself and scored whichever arrived, so frame_buffer_capacity and
+        # frame_buffer_max_age were settings with nothing behind them --
+        # framebuffer.py was vendored and never instantiated.
+        sampler = threading.Thread(target=self._sample, name="pinozcam-grab",
+                                   daemon=True)
+        sampler.start()
 
         while not self._stop.is_set():
             tick = time.monotonic()
@@ -203,7 +226,7 @@ class Detector(object):
             if self._paused_by_switch:
                 self._paused_by_switch = False
                 self._log.info("enable_ai is on again; analysing.")
-            frame = self._source.wait_next(last_seq, self._stop, FRAME_WAIT)
+            frame = self._buffer.take(timeout=CONSUMER_WAIT)
 
             if frame is None:
                 # One notice per outage, not one per tick.
@@ -223,8 +246,6 @@ class Detector(object):
                 self._notify_camera(
                     "\u26a0\ufe0f Camera is back. Print failure detection "
                     "has resumed.")
-            last_seq = frame.sequence
-
             # Minimum interval between checks, a brake for slow hosts.
             if (self._detection_interval
                     and tick - self._last_check_at < self._detection_interval):
@@ -242,8 +263,55 @@ class Detector(object):
 
             self._pace(tick)
 
+        self._buffer.close()
+        sampler.join(timeout=5)
         self._teardown()
         self._log.info("Detection stopped")
+
+    def _sample(self):
+        """Grab frames, measure them, and offer them to the buffer.
+
+        Sharpness is only measured when the buffer is deep enough for the
+        answer to change anything -- with one candidate there is nothing to
+        choose between, and the measurement costs a crop, a blur and a
+        difference on every frame.
+        """
+        last_seq = -1
+        while not self._stop.is_set():
+            tick = time.monotonic()
+            frame = self._source.wait_next(last_seq, self._stop, FRAME_WAIT)
+            if frame is None:
+                self._pace(tick)
+                continue
+            last_seq = frame.sequence
+            try:
+                image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
+                image = camera.transform_image(image, self.camera_source,
+                                               logger=self._log)
+                score = (self._measure_sharpness(image)
+                         if self._buffer.should_measure() else float("-inf"))
+                self._buffer.put(image, score, tick)
+                self._last_sampled_jpeg = frame.jpeg_bytes
+            except Exception as exc:                         # noqa: BLE001
+                self._log.debug("could not sample a frame: %s", exc)
+            self._pace(tick)
+
+    @staticmethod
+    def _measure_sharpness(image):
+        """High-pass energy on a centre crop, without NumPy.
+
+        Copied from the OctoPrint build's camera.measure_sharpness.
+        """
+        from PIL import ImageChops, ImageFilter, ImageStat
+        width, height = image.size
+        crop_w = min(width, SHARPNESS_CROP[0])
+        crop_h = min(height, SHARPNESS_CROP[1])
+        left = (width - crop_w) // 2
+        top = (height - crop_h) // 2
+        grey = image.crop(
+            (left, top, left + crop_w, top + crop_h)).convert("L")
+        blurred = grey.filter(ImageFilter.GaussianBlur(1))
+        return ImageStat.Stat(ImageChops.difference(grey, blurred)).mean[0]
 
     def _camera_watch(self, ok, now):
         """Edge-triggered camera-outage detector for the chat channels.
@@ -305,6 +373,20 @@ class Detector(object):
         self._detection_interval = d["detection_interval"]
         self._enabled = d["enable_ai"]
         self._cpu_share = d["cpu_share"]
+        # ⚠️ Rebuilt, not resized. framebuffer.py is one of the modules
+        # kept byte-identical with the OctoPrint build, so it does not grow
+        # a setter for this. Losing the few candidates in flight is the
+        # right trade for a settings change the user just made.
+        if (self._buffer is not None
+                and (self._buffer.capacity != d["frame_buffer_capacity"]
+                     or self._buffer_max_age != d["frame_buffer_max_age"])):
+            self._buffer_max_age = d["frame_buffer_max_age"]
+            self._buffer = framebuffer.FrameBuffer(
+                capacity=d["frame_buffer_capacity"],
+                max_age=d["frame_buffer_max_age"])
+            self._log.info("Candidate buffer rebuilt: capacity %d, max age "
+                           "%.0fs", d["frame_buffer_capacity"],
+                           d["frame_buffer_max_age"])
         mask = self._cfg.camera.get("mask_image_data") or ""
         if mask != self._mask:
             self._mask = mask
@@ -337,16 +419,15 @@ class Detector(object):
         if remaining > 0:
             self._stop.wait(remaining)
 
-    def _score(self, frame):
-        """Infer on one frame and feed the verdict into the window."""
-        from io import BytesIO
-        from PIL import Image
+    def _score(self, candidate):
+        """Infer on one candidate and feed the verdict into the window.
 
-        self.last_jpeg = frame.jpeg_bytes
-        image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
-        # Before the mask and before inference: see camera.transform_image.
-        image = camera.transform_image(image, self.camera_source,
-                                       logger=self._log)
+        The image arrives already decoded and already transformed -- the
+        sampler does both, because it has to decode anyway to measure
+        sharpness.
+        """
+        self.last_jpeg = self._last_sampled_jpeg
+        image = candidate.image
 
         # Mask before inference, not after: painting the ignored region
         # black means the model never sees it, so nothing there can score.
