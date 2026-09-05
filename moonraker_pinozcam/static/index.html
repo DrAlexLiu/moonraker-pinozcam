@@ -391,6 +391,8 @@ detection:[
  ["print_layout_threshold","Display Score Threshold","num",{min:0,max:1,step:0.05},
   "How much of the frame may already be print before a detection there is discounted."]],
 performance:[
+ ["ai_backend","Compute Backend","sel",{options:[["auto","Auto-detect"],["cpu","CPU"],["rknn","Rockchip NPU"],["awnn","Allwinner NPU"],["acl","Ascend NPU"],["bpu","Horizon BPU"],["vulkan","GPU"],["coreml","Apple Neural Engine"]]},
+  "Auto-detect picks the fastest hardware this board actually has. Forcing one fails loudly if that hardware is missing, rather than quietly using something slower. Takes effect at the next print."],
  ["cpu_share","CPU Cores Used","sel",{options:[[0.25,"25%"],[0.5,"50%"],[0.75,"75%"],[1,"100%"]]},
   "Share of the performance cores the detector may use. Extra cores buy less than their count suggests here: 2 to 4 measured +15% on an A55."],
  ["frame_sample_interval","Frame Sampling Interval (ms)","num",{min:10,max:1000,step:10},
@@ -498,6 +500,8 @@ async function save(){
     const el=$("f-"+key); if(!el)continue;
     if(kind==="check") body[key]=el.checked;
     else if(kind==="text") body[key]=el.value;
+    // A select can hold a string (Compute Backend) or a number (CPU share).
+    else if(kind==="sel"&&isNaN(parseFloat(el.value))) body[key]=el.value;
     else body[key]=parseFloat(el.value);
   }
   const r=await fetch("api/settings",{method:"POST",
@@ -700,5 +704,19 @@ window.addEventListener("resize",()=>{ drawMask($("overlay"),$("view"),false);
   if($("d-mask").classList.contains("open"))redrawEditor(); });
 $("view").addEventListener("load",()=>{ drawMask($("overlay"),$("view"),false);
   $("overlay").style.display=count()?"block":"none"; });
-$("view").src="stream?"+Date.now();
+
+/* An <img> pointed at an MJPEG stream never reconnects: when the service
+   restarts the connection dies and the element just sits on its last frame,
+   or blank. Nothing in the page notices, so the picture stays dead until
+   someone reloads -- which is exactly what it looked like when the service
+   was restarted underneath an open tab. Watch for it and re-point. */
+let streamAt = 0;
+function openStream(){ streamAt = Date.now(); $("view").src="stream?"+streamAt; }
+$("view").addEventListener("error", () => setTimeout(openStream, 2000));
+setInterval(() => {
+  // A browser reports a broken MJPEG connection unreliably, so also treat
+  // "this element still has not decoded anything" as a reason to retry.
+  if(!$("view").naturalWidth && Date.now() - streamAt > 15000) openStream();
+}, 5000);
+openStream();
 </script>

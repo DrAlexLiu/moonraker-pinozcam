@@ -15,6 +15,11 @@ cannot be the only strategy.
 
 import requests
 
+# The name AnnotatedView registers with Moonraker. Defined here, and
+# imported by web.py, so the skip below and the registration can never
+# disagree about what our own entry is called.
+SELF_WEBCAM_NAME = "PiNozCam"
+
 # Set by Mainsail's own nginx site file at install time, so it is a
 # convention that holds across virtually every Klipper install.
 NGINX_WEBCAM_PATHS = ("/webcam/", "/webcam2/", "/webcam3/", "/webcam4/")
@@ -93,6 +98,18 @@ def resolve(config_camera, client, logger=None):
     # it carries the rotation and flip the user set once in the frontend.
     try:
         for cam in client.list_webcams():
+            # ⚠️ Skip the entry WE registered. PiNozCam publishes its own
+            # annotated view as a webcam, so it appears in this list --
+            # first, on this board. Picking it would feed the detector its
+            # own output, and probing it re-enters this function from the
+            # web server's thread, since that endpoint resolves a camera to
+            # answer. It only failed to happen by luck: right after a
+            # restart our endpoint has no frame and answers 503, so it was
+            # judged unusable. With a frame cached it would be chosen.
+            if (cam.get("name") or "").strip() == SELF_WEBCAM_NAME:
+                log("debug", "Camera: skipping our own %r entry",
+                    SELF_WEBCAM_NAME)
+                continue
             snap = cam.get("snapshot_url") or ""
             stream = cam.get("stream_url") or ""
             if not snap and not stream:

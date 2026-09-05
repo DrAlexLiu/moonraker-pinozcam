@@ -31,13 +31,14 @@ class Detector(object):
     """Owns one detection run for one print."""
 
     def __init__(self, config, client, logger, on_failure=None,
-                 on_frame=None, view=None):
+                 on_frame=None, view=None, on_notice=None):
         self._cfg = config
         self._client = client
         self._log = logger
         self._on_failure = on_failure      # called once per escalation
         self._on_frame = on_frame          # called for every scored frame
         self._view = view                  # AnnotatedView, or None
+        self._on_notice = on_notice        # operational notice -> the bots
 
         d = config.detection
         self._score_threshold = d["scores_threshold"]
@@ -61,6 +62,9 @@ class Detector(object):
         # the page showed "AI not started" with no reason and the user had
         # to find the journal to learn the backend was missing.
         self.last_error = None
+        # Edge state for the camera watch, matching the OctoPrint build.
+        self.camera_ok_at = 0.0
+        self.camera_alerted = False
         # Kept so a /check command can answer with a real photo rather than
         # fetching its own, which would race the detection loop for the
         # camera and cost an extra second.
@@ -162,33 +166,32 @@ class Detector(object):
 
         self._log.info("Detecting")
         last_seq = -1
-        last_frame_at = time.monotonic()
-        camera_warned = False
+        self.camera_ok_at = time.monotonic()
+        self.camera_alerted = False
 
         while not self._stop.is_set():
             tick = time.monotonic()
             frame = self._source.wait_next(last_seq, self._stop, FRAME_WAIT)
 
             if frame is None:
-                # Report a missing camera once, not every tick.
-                if (time.monotonic() - last_frame_at > CAMERA_OFFLINE_AFTER
-                        and not camera_warned):
-                    camera_warned = True
-                    self._log.warning(
-                        "No camera frame for %ds -- detection is blind",
-                        int(CAMERA_OFFLINE_AFTER))
+                # One notice per outage, not one per tick.
+                if self._camera_watch(False, time.monotonic()) == "offline":
                     self.last_error = (
                         "No camera frame for %ds -- detection is blind."
                         % int(CAMERA_OFFLINE_AFTER))
+                    self._notify_camera(
+                        "\u26a0\ufe0f Camera lost: no frame for %d s. Print "
+                        "failure detection is BLIND until the camera "
+                        "returns." % int(CAMERA_OFFLINE_AFTER))
                 self._pace(tick)
                 continue
 
-            if camera_warned:
-                camera_warned = False
-                self._log.info("Camera is back; detection resumed")
+            if self._camera_watch(True, time.monotonic()) == "recovered":
                 self.last_error = None
+                self._notify_camera(
+                    "\u26a0\ufe0f Camera is back. Print failure detection "
+                    "has resumed.")
             last_seq = frame.sequence
-            last_frame_at = time.monotonic()
 
             try:
                 self._score(frame)
@@ -202,6 +205,44 @@ class Detector(object):
 
         self._teardown()
         self._log.info("Detection stopped")
+
+    def _camera_watch(self, ok, now):
+        """Edge-triggered camera-outage detector for the chat channels.
+
+        Returns "offline" once per outage (after CAMERA_OFFLINE_AFTER
+        seconds without a frame), "recovered" once when frames return after
+        an alert, None otherwise. Same shape and the same constant as the
+        OctoPrint build's `_camera_watch`, so the two products behave
+        identically when a camera drops mid-print.
+
+        Only the detection loop calls this, so it fires only during a print.
+        """
+        if ok:
+            self.camera_ok_at = now
+            if self.camera_alerted:
+                self.camera_alerted = False
+                return "recovered"
+            return None
+        if (not self.camera_alerted
+                and now - self.camera_ok_at > CAMERA_OFFLINE_AFTER):
+            self.camera_alerted = True
+            return "offline"
+        return None
+
+    def _notify_camera(self, text):
+        """One operational notice to every configured medium.
+
+        Mute is respected by the notifier. Deliberately outside the normal
+        alert budget: a blind detector is not a print failure, and being
+        silenced by max_notification is the opposite of what this is for.
+        """
+        self._log.warning("%s", text)
+        if self._on_notice is None:
+            return
+        try:
+            self._on_notice(text)
+        except Exception as exc:                             # noqa: BLE001
+            self._log.error("Could not send the camera notice: %s", exc)
 
     def _pace(self, tick_started):
         """Sleep out the remainder of this tick, interruptibly."""

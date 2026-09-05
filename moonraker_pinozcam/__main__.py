@@ -152,7 +152,9 @@ def main(argv=None):
 
     view = AnnotatedView(cfg, client, LOG, detector_ref=detector_ref,
                          notifier=notifier)
-    detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view)
+    detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view,
+                        on_notice=lambda text: notifier.alert(
+                            text, with_buttons=True))
     detector_ref[0] = detector
 
     def on_state_change(state):

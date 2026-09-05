@@ -273,7 +273,9 @@ class _Server(ThreadingHTTPServer):
 class AnnotatedView(object):
     """The HTTP server plus its Moonraker registration."""
 
-    WEBCAM_NAME = "PiNozCam"
+    # One definition, in camera.py, which also has to recognise it in
+    # Moonraker's list so we never resolve to our own output.
+    from .camera import SELF_WEBCAM_NAME as WEBCAM_NAME
 
     # Settings the page may change, with the bounds the OctoPrint schema
     # declares. Anything outside this dict is not writable over HTTP --
@@ -293,6 +295,10 @@ class AnnotatedView(object):
         "frame_buffer_capacity": (int, 4, 16),
         "cpu_share": (float, 0.01, 1.0),
         "action": (int, 0, 2),
+        # Not a number: validated against the set the backend resolver
+        # accepts, because a typo here would quietly disable the NPU.
+        "ai_backend": (("auto", "cpu", "rknn", "awnn", "acl", "bpu",
+                        "vulkan", "coreml"), 0, 0),
     }
 
     # Written to [camera] rather than [detection].
@@ -433,6 +439,12 @@ class AnnotatedView(object):
     def _cast(key, value, spec):
         """Range-check one incoming setting, or raise ValueError."""
         caster, low, high = spec
+        if isinstance(caster, tuple):
+            text = str(value).strip()
+            if text not in caster:
+                raise ValueError("%s must be one of: %s"
+                                 % (key, ", ".join(caster)))
+            return text
         if caster is str:
             return str(value).strip()
         if caster is bool:
