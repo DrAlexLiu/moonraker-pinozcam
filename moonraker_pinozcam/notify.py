@@ -145,6 +145,10 @@ class Notifier(ConfirmMixin):
         self.confirm_tokens = {}
         self.confirm_scope = 0
 
+        # The alert budget. Both settings existed and neither did anything.
+        self._alerts_sent = 0
+        self._last_alert_at = 0.0
+
     # ---- what the copied code calls into -------------------------------
 
     @staticmethod
@@ -240,12 +244,19 @@ class Notifier(ConfirmMixin):
 
     # ---- outbound ------------------------------------------------------
 
-    def alert(self, caption, image=None, with_buttons=True):
+    def alert(self, caption, image=None, with_buttons=True, budgeted=True):
         """Send one alert to every configured channel.
 
         `image` is raw JPEG bytes. Outbound only -- the inbound replies go
         through the copied handlers, which answer whoever asked.
+
+        `budgeted=False` exempts a message from max_notification and
+        notify_interval. Operational notices use it: a camera that has gone
+        blind is not a print failure, and silencing that by an alert quota
+        is the opposite of what the quota is for.
         """
+        if budgeted and not self._within_budget():
+            return
         if self.alerts_muted:
             self._logger.info("Muted; not sending: %s",
                               caption.split("\n")[0])
@@ -277,11 +288,37 @@ class Notifier(ConfirmMixin):
             self.discord_bot.send(content=text, image=stream(),
                                   components=comp)
 
+    def _within_budget(self):
+        """Whether an alert may be sent now, per the notification settings.
+
+        Suppressed alerts are DROPPED, not queued -- an alert about a
+        moment that has passed is worse than none.
+        """
+        limits = self._cfg.notification
+        cap = int(limits.get("max_notification") or 0)
+        gap = float(limits.get("notify_interval") or 0)
+        now = time.monotonic()
+        if cap and self._alerts_sent >= cap:
+            self._logger.info(
+                "Alert suppressed: %d already sent this print, the limit is "
+                "%d.", self._alerts_sent, cap)
+            return False
+        if gap and self._last_alert_at and now - self._last_alert_at < gap:
+            self._logger.info(
+                "Alert suppressed: %.0fs since the last one, the minimum "
+                "interval is %.0fs.", now - self._last_alert_at, gap)
+            return False
+        self._alerts_sent += 1
+        self._last_alert_at = now
+        return True
+
     def new_print(self):
         """Invalidate outstanding confirmations at every print boundary."""
         self._new_confirm_scope()
         # Muting is per print, which is what MUTED_LINE promises.
         self.alerts_muted = False
+        self._alerts_sent = 0
+        self._last_alert_at = 0.0
 
     # ==================================================================
     # COPIED VERBATIM from the OctoPrint build's notify.py.

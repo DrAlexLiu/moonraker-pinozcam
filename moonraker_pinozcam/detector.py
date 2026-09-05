@@ -16,7 +16,7 @@ from .window import FailureWindow
 # One tick of the loop. It is independent of the frame source's own rate: a source may produce
 # faster, and wait_next()'s sequence argument makes the loop skip what it
 # missed rather than fall behind.
-SAMPLE_INTERVAL = 0.2   # overridden per-config by frame_sample_interval
+# Sampling cadence comes from frame_sample_interval; see Detector._refresh.
 
 # How long to wait for a frame before calling the camera missing.
 FRAME_WAIT = 5.0
@@ -40,15 +40,23 @@ class Detector(object):
         self._on_notice = on_notice        # operational notice -> the bots
 
         d = config.detection
+        # ⚠️ These are re-read every tick by _refresh(), not cached for the
+        # life of the run. They used to be read once here, so saving a
+        # threshold, a mask or the master switch did nothing until the
+        # service was restarted -- while the page said "Saved."
         self._score_threshold = d["scores_threshold"]
         self._sensitivity = d["img_sensitivity"]
-        self._start_delay = d["ai_start_delay"]
+        self._sample_interval = d["frame_sample_interval"]
+        self._detection_interval = d["detection_interval"]
+        self._enabled = d["enable_ai"]
         self._cpu_share = d["cpu_share"]
-        # Read once here, not per frame: like ai_start_delay, forcing a
-        # backend takes effect at the next print, not mid-run.
+        self._mask = config.camera.get("mask_image_data") or ""
+        # Read once per RUN, like the OctoPrint build: both need a new
+        # backend or a new thread, so they take effect at the next print.
+        self._start_delay = d["ai_start_delay"]
         self._ai_backend = d.get("ai_backend") or "auto"
         self._cpus = None          # resolved once, at setup
-        self._mask = config.camera.get("mask_image_data") or ""
+        self._last_check_at = 0.0
 
         self.window = FailureWindow(
             count_time=d["count_time"], failure_ratio=d["failure_ratio"])
@@ -57,7 +65,8 @@ class Detector(object):
         self._stop = threading.Event()
         self._source = None
         self._backend = None
-        self._fired = False                # one action per print, not per frame
+        self._fired = False                # one episode, not one per frame
+        self._paused_by_switch = False
         self.last_result = None
         # The one line worth putting in front of the user when detection is
         # not working. Setup failure used to be logged and nothing else, so
@@ -174,6 +183,19 @@ class Detector(object):
 
         while not self._stop.is_set():
             tick = time.monotonic()
+            self._refresh()
+            if not self._enabled:
+                # The master switch. Detection stops; the camera, the bots
+                # and the annotated view all keep working, which is what
+                # "only pauses the analysis" means.
+                if not self._paused_by_switch:
+                    self._paused_by_switch = True
+                    self._log.info("enable_ai is off; not analysing frames.")
+                self._pace(tick)
+                continue
+            if self._paused_by_switch:
+                self._paused_by_switch = False
+                self._log.info("enable_ai is on again; analysing.")
             frame = self._source.wait_next(last_seq, self._stop, FRAME_WAIT)
 
             if frame is None:
@@ -195,6 +217,13 @@ class Detector(object):
                     "\u26a0\ufe0f Camera is back. Print failure detection "
                     "has resumed.")
             last_seq = frame.sequence
+
+            # Minimum interval between checks, a brake for slow hosts.
+            if (self._detection_interval
+                    and tick - self._last_check_at < self._detection_interval):
+                self._pace(tick)
+                continue
+            self._last_check_at = tick
 
             try:
                 self._score(frame)
@@ -247,9 +276,57 @@ class Detector(object):
         except Exception as exc:                             # noqa: BLE001
             self._log.error("Could not send the camera notice: %s", exc)
 
+    def _refresh(self):
+        """Apply any settings change to the running detector.
+
+        Three groups, the same split the OctoPrint build documents:
+
+        * thresholds that MOVE THE LINE (failure_ratio, action, the
+          notification limits) apply to the next frame and keep the
+          window -- they change the decision, not the measurement;
+        * MEANING-CHANGING values (img_sensitivity, scores_threshold,
+          count_time) apply to the next frame AND reset the window and
+          warm-up, because statistics gathered under the old scale are not
+          comparable to ones gathered under the new;
+        * ai_start_delay and ai_backend are read once per run, because
+          they decide how a run starts.
+        """
+        if not self._cfg.reload_if_changed():
+            return
+        d = self._cfg.detection
+        self._sample_interval = d["frame_sample_interval"]
+        self._detection_interval = d["detection_interval"]
+        self._enabled = d["enable_ai"]
+        self._cpu_share = d["cpu_share"]
+        mask = self._cfg.camera.get("mask_image_data") or ""
+        if mask != self._mask:
+            self._mask = mask
+            self._log.info("Undetect zone updated (%d cells ignored)",
+                           mask.count("1"))
+        if d["failure_ratio"] != self.window.failure_ratio:
+            self.window.failure_ratio = float(d["failure_ratio"])
+            self._log.info("Failure ratio threshold is now %.0f%%",
+                           self.window.failure_ratio * 100)
+        changed = [name for name, old, new in (
+            ("img_sensitivity", self._sensitivity, d["img_sensitivity"]),
+            ("scores_threshold", self._score_threshold,
+             d["scores_threshold"]),
+            ("count_time", self.window.count_time, d["count_time"]),
+        ) if old != new]
+        if changed:
+            self._sensitivity = d["img_sensitivity"]
+            self._score_threshold = d["scores_threshold"]
+            self.window.count_time = float(d["count_time"])
+            self.window.reset()
+            self._fired = False
+            self._log.info(
+                "Detection criteria changed (%s); window and warm-up reset "
+                "-- results measured on the old scale are not comparable.",
+                ", ".join(changed))
+
     def _pace(self, tick_started):
         """Sleep out the remainder of this tick, interruptibly."""
-        remaining = SAMPLE_INTERVAL - (time.monotonic() - tick_started)
+        remaining = self._sample_interval - (time.monotonic() - tick_started)
         if remaining > 0:
             self._stop.wait(remaining)
 

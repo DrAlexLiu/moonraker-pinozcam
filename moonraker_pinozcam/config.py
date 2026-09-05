@@ -27,6 +27,32 @@ class Config(object):
         except configparser.Error as exc:
             raise ConfigError("%s is not valid INI: %s" % (self.path, exc))
 
+    def reload_if_changed(self):
+        """Re-read the file if it changed on disk. True if it did.
+
+        Mainsail and Fluidd edit this file in the browser, and the docs
+        tell users to -- so "saved settings take effect" cannot mean only
+        "settings saved through our own page". Cheap enough to call every
+        detection tick: one stat().
+        """
+        try:
+            stamp = os.stat(self.path).st_mtime_ns
+        except OSError:
+            return False
+        if stamp == getattr(self, "_mtime", None):
+            return False
+        first = not hasattr(self, "_mtime")
+        self._mtime = stamp
+        if first:
+            return False
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(self.path)
+        except configparser.Error:
+            return False          # mid-save; try again next tick
+        self._cp = parser
+        return True
+
     def _get(self, section, option, fallback=None):
         try:
             return self._cp.get(section, option)
