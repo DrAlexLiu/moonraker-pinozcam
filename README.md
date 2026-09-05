@@ -210,8 +210,6 @@ line and a stall does show up in the print.
   outside the house, and why this project does not open a tunnel for you
 - [Licences](docs/licenses.md) -- what ships from where, and the LGPL
   source offer for the statically linked daemon
-- [Audit prompt](docs/AUDIT_PROMPT.md) -- for reviewing this port against
-  the OctoPrint build it came from
 
 Most of these are ported from the OctoPrint build's own docs. The model, the
 daemon and every detection setting are shared, so the text is upstream's

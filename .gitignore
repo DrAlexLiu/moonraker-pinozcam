@@ -5,3 +5,4 @@ __pycache__/
 venv/
 *.log
 .ruff_cache/
+AUDIT_PROMPT.md
