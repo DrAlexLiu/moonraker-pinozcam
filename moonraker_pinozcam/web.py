@@ -12,6 +12,8 @@ of RAM.
 """
 
 import io
+import json
+import os
 import socket
 import threading
 import time
@@ -74,12 +76,59 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        # Bound the read: this listens on 0.0.0.0, and a settings POST is
+        # a few hundred bytes while a mask is ~16 KB.
+        if length <= 0 or length > 64 * 1024:
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        owner = self.server.owner
+        payload = self._read_json()
+        if payload is None:
+            return self._json({"error": "bad request"}, 400)
+        try:
+            if path == "/api/settings":
+                owner.save_settings(payload)
+            elif path == "/api/mask":
+                owner.save_mask(payload.get("mask_image_data", ""))
+            else:
+                return self.send_error(404)
+        except Exception as exc:                             # noqa: BLE001
+            return self._json({"error": str(exc)}, 500)
+        return self._json({"ok": True})
+
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path in ("/snapshot", "/current"):
             self._snapshot()
-        elif path in ("/stream", "/"):
+        elif path == "/stream":
             self._stream()
+        elif path == "/":
+            self._page()
+        elif path == "/api/settings":
+            self._json(self.server.owner.read_settings())
+        elif path == "/api/status":
+            self._json(self.server.owner.read_status())
         elif path == "/health":
             body = b"ok"
             self.send_response(200)
@@ -89,6 +138,21 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         else:
             self.send_error(404)
+
+    def _page(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "static", "index.html")
+        try:
+            with open(path, "rb") as handle:
+                body = handle.read()
+        except OSError:
+            return self.send_error(404)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _snapshot(self):
         jpeg, _ = self.server.frames.latest()
@@ -142,9 +206,10 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, frames, stopping):
+    def __init__(self, addr, frames, stopping, owner):
         self.frames = frames
         self.stopping = stopping
+        self.owner = owner
         ThreadingHTTPServer.__init__(self, addr, _Handler)
 
 
@@ -153,10 +218,26 @@ class AnnotatedView(object):
 
     WEBCAM_NAME = "PiNozCam"
 
-    def __init__(self, config, client, logger):
+    # Settings the page may change, with the bounds the OctoPrint schema
+    # declares. Anything outside this dict is not writable over HTTP --
+    # this listens on 0.0.0.0, so the set is deliberately narrow and holds
+    # no credentials.
+    EDITABLE = {
+        "scores_threshold": (float, 0.0, 1.0),
+        "img_sensitivity": (float, 1e-4, 1.0),
+        "failure_ratio": (float, 0.01, 1.0),
+        "count_time": (int, 10, 3600),
+        "ai_start_delay": (int, 0, 60000),
+        "cpu_share": (float, 0.01, 1.0),
+        "action": (int, 0, 2),
+    }
+
+    def __init__(self, config, client, logger, detector_ref=None):
+        self._config = config
         self._cfg = config.web
         self._client = client
         self._log = logger
+        self._detector_ref = detector_ref
         self.frames = FrameHolder()
         self._stopping = threading.Event()
         self._server = None
@@ -170,6 +251,66 @@ class AnnotatedView(object):
         """Called by the detector for every scored frame."""
         self.frames.publish(jpeg_bytes)
 
+    # ---- API backing the page -----------------------------------------
+
+    def read_settings(self):
+        detection = self._config.detection
+        out = {k: detection[k] for k in self.EDITABLE if k in detection}
+        out["mask_image_data"] = self._config.camera.get(
+            "mask_image_data") or ""
+        return out
+
+    def save_settings(self, payload):
+        """Validate and write settings back to the config file."""
+        updates = {}
+        for key, value in (payload or {}).items():
+            if key not in self.EDITABLE:
+                continue                    # ignore rather than fail
+            caster, low, high = self.EDITABLE[key]
+            try:
+                number = caster(value)
+            except (TypeError, ValueError):
+                raise ValueError("%s is not a number" % key)
+            if not low <= number <= high:
+                raise ValueError("%s must be between %s and %s"
+                                 % (key, low, high))
+            updates[key] = number
+        if updates:
+            self._config.write_options("detection", updates)
+            self._log.info("Settings updated from the web page: %s",
+                           ", ".join(sorted(updates)))
+
+    def save_mask(self, data):
+        data = "".join(ch for ch in (data or "") if ch in "01")
+        if data:
+            side = int(len(data) ** 0.5)
+            if side * side != len(data):
+                raise ValueError("mask length %d is not a square"
+                                 % len(data))
+        self._config.write_options("camera", {"mask_image_data": data})
+        self._log.info("Mask updated from the web page (%d cells ignored)",
+                       data.count("1"))
+
+    def read_status(self):
+        detector = self._detector_ref[0] if self._detector_ref else None
+        state = self._client.state
+        out = {
+            "printer_state": state.state,
+            "detecting": bool(detector and detector.running),
+        }
+        if detector is not None:
+            stats = detector.window.stats
+            out.update({"window_frames": stats["window_frames"],
+                        "alarming": stats["alarming"],
+                        "ratio": stats["ratio"], "armed": stats["armed"]})
+            last = detector.last_result
+            if last:
+                out["severity"] = last.get("severity")
+                out["model_ms"] = (last.get("elapsed") or 0) * 1000.0
+            if detector.backend_name:
+                out["backend"] = detector.backend_name
+        return out
+
     def start(self):
         if not self.enabled:
             self._log.info("Annotated view disabled (web.port = 0)")
@@ -182,7 +323,7 @@ class AnnotatedView(object):
             # precedent for a third-party service with its own port, does
             # the same.
             self._server = _Server(("0.0.0.0", port), self.frames,
-                                   self._stopping)
+                                   self._stopping, self)
         except OSError as exc:
             self._log.error("Annotated view could not bind port %d: %s "
                             "-- is something else using it?", port, exc)

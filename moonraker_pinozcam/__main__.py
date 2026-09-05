@@ -127,7 +127,7 @@ def main(argv=None):
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not %s the print: %s", action, exc)
 
-    view = AnnotatedView(cfg, client, LOG)
+    view = AnnotatedView(cfg, client, LOG, detector_ref=detector_ref)
     detector = Detector(cfg, client, LOG, on_failure=on_failure, view=view)
     detector_ref[0] = detector
 

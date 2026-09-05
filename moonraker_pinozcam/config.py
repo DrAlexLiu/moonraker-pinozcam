@@ -6,6 +6,7 @@ unreadable file must fail with a message a user can act on.
 """
 
 import configparser
+import io
 import os
 
 
@@ -73,6 +74,64 @@ class Config(object):
             else:
                 out[key] = raw
         return out
+
+    def write_options(self, section, values):
+        """Write options back, preserving comments and layout.
+
+        ConfigParser would round-trip this file by rewriting it, which
+        discards every comment -- and in this build the comments ARE the
+        documentation: there is no settings dialog explaining what
+        failure_ratio means. So edit the lines in place instead, and append
+        to the section only for keys that are not there yet.
+        """
+        with io.open(self.path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+
+        header = "[%s]" % section
+        start = None
+        for index, line in enumerate(lines):
+            if line.strip() == header:
+                start = index
+                break
+        if start is None:
+            lines.extend(["", header])
+            start = len(lines) - 1
+
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            stripped = lines[index].strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                end = index
+                break
+
+        remaining = dict(values)
+        for index in range(start + 1, end):
+            stripped = lines[index].lstrip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key in remaining:
+                lines[index] = "%s = %s" % (key, remaining.pop(key))
+
+        if remaining:
+            # Insert before any trailing blank lines so the section does not
+            # grow a gap in the middle each time this runs.
+            insert_at = end
+            while insert_at > start + 1 and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            for key in sorted(remaining):
+                lines.insert(insert_at, "%s = %s" % (key, remaining[key]))
+                insert_at += 1
+
+        # Write via a temporary file in the same directory: a truncated
+        # config on a power cut would stop the service from starting.
+        temp = self.path + ".tmp"
+        with io.open(temp, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        os.replace(temp, self.path)
+
+        self._cp = configparser.ConfigParser()
+        self._cp.read(self.path)
 
     # ---- typed views -------------------------------------------------
 

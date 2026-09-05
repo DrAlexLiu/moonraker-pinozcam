@@ -60,6 +60,7 @@ class Detector(object):
         # fetching its own, which would race the detection loop for the
         # camera and cost an extra second.
         self.last_jpeg = None
+        self.backend_name = None
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -98,8 +99,8 @@ class Detector(object):
 
         self._backend = nozcam_backend.NozcamBackend(
             plugin_dir=None, logger=self._log, backend="auto")
-        self._log.info("Inference backend ready: %s",
-                       self._backend.describe())
+        self.backend_name = self._backend.describe()
+        self._log.info("Inference backend ready: %s", self.backend_name)
 
         # Which cores the daemon may use. Resolved from the live topology
         # rather than from a core count, because a heterogeneous board's
