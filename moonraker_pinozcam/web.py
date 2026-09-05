@@ -306,12 +306,38 @@ class AnnotatedView(object):
         "notify_interval": (int, 0, 3600),
     }
 
-    # ⚠️ Bot tokens are deliberately NOT in any of the three sets above.
-    # This server has no login and binds 0.0.0.0, so anything it will
-    # hand back is readable by everyone on the network. The page shows
-    # whether a channel is configured and never what it is configured
-    # with; credentials are edited in the config file, which is what the
-    # file's ownership already protects.
+    # Credentials, in their own INI sections. WRITE-ONLY over HTTP: a
+    # token can be set here but is never handed back.
+    #
+    # ⚠️ The asymmetry is the whole point. This server has no login and
+    # binds 0.0.0.0, so anything read_settings() returns is readable by
+    # everyone on the network -- but WRITE access adds no new exposure,
+    # because every other setting is already writable here and Mainsail
+    # edits the same file in the browser anyway. So the page gets the
+    # same fields the OctoPrint build has, and a reader still cannot
+    # lift the token off the wire.
+    EDITABLE_TELEGRAM = {
+        "enabled": (bool, 0, 1),
+        "token": (str, 0, 0),
+        "chat_id": (str, 0, 0),
+    }
+    EDITABLE_DISCORD = {
+        "enabled": (bool, 0, 1),
+        "bot_token": (str, 0, 0),
+        "channel_id": (str, 0, 0),
+    }
+
+    # Sent in place of a stored token. Posted back unchanged it means
+    # "leave it alone"; an empty string means "clear it". Anything else is
+    # a new value. Without this a page load followed by Save would wipe
+    # every credential it was never shown.
+    SECRET_MASK = "\u2022" * 8
+
+    # Which of the fields above are true credentials rather than
+    # addresses. A chat or channel id is not usable without its token --
+    # Discord channel ids are visible to everyone in the server -- and
+    # masking them would leave no way to check what is configured.
+    SECRETS = ("token", "bot_token")
 
     def __init__(self, config, client, logger, detector_ref=None,
                  notifier=None):
@@ -389,13 +415,18 @@ class AnnotatedView(object):
         for key in self.EDITABLE_NOTIFY:
             if key in notification:
                 out[key] = notification[key]
-        # Configured-or-not, never the value. See EDITABLE_CAMERA above.
-        telegram = self._config.get_section("telegram")
-        discord = self._config.get_section("discord")
-        out["telegram_enabled"] = bool(
-            telegram.get("enabled") and telegram.get("token"))
-        out["discord_enabled"] = bool(
-            discord.get("enabled") and discord.get("bot_token"))
+        for prefix, section, allowed in (
+                ("telegram_", "telegram", self.EDITABLE_TELEGRAM),
+                ("discord_", "discord", self.EDITABLE_DISCORD)):
+            values = self._config.get_section(section)
+            for key in allowed:
+                value = values.get(key)
+                if key in self.SECRETS:
+                    # Present-or-absent, never the value.
+                    value = self.SECRET_MASK if value else ""
+                elif key == "enabled":
+                    value = bool(value)
+                out[prefix + key] = value if value is not None else ""
         return out
 
     @staticmethod
@@ -422,18 +453,28 @@ class AnnotatedView(object):
         blob for every tab, and a build of the page newer than the service
         should still be able to save the settings this service knows.
         """
-        sections = (("detection", self.EDITABLE),
-                    ("camera", self.EDITABLE_CAMERA),
-                    ("notification", self.EDITABLE_NOTIFY))
+        sections = (("detection", self.EDITABLE, ""),
+                    ("camera", self.EDITABLE_CAMERA, ""),
+                    ("notification", self.EDITABLE_NOTIFY, ""),
+                    ("telegram", self.EDITABLE_TELEGRAM, "telegram_"),
+                    ("discord", self.EDITABLE_DISCORD, "discord_"))
         written = []
-        for section, allowed in sections:
+        for section, allowed, prefix in sections:
             updates = {}
-            for key, value in (payload or {}).items():
-                if key in allowed:
-                    updates[key] = self._cast(key, value, allowed[key])
+            for key, spec in allowed.items():
+                field = prefix + key
+                if field not in (payload or {}):
+                    continue
+                value = payload[field]
+                # The mask is what the page was given in place of a stored
+                # secret; posting it back means "unchanged".
+                if key in self.SECRETS and value == self.SECRET_MASK:
+                    continue
+                updates[key] = self._cast(key, value, spec)
             if updates:
                 self._config.write_options(section, updates)
-                written.extend(updates)
+                # Never log a credential, not even its name next to a value.
+                written.extend(prefix + k for k in updates)
         if written:
             self._log.info("Settings updated from the web page: %s",
                            ", ".join(sorted(written)))
