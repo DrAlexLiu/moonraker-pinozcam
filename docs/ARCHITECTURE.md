@@ -265,3 +265,68 @@ rewrite.
 - **Never use `platform.machine()`** to choose a binary: it reports the
   *kernel* arch and returns `aarch64` on a 64-bit-kernel/32-bit-userspace
   board. Use `struct.calcsize("P") * 8`.
+
+---
+
+## 10. Measured on a BIQU CB2, 2026-09-05 — where the time actually goes
+
+Camera is a UVC 4K module (`0edc:3080`, "DH Camera") on USB 2.0, feeding
+crowsnest/ustreamer with `--format MJPEG --encoder HW`.
+
+### The frame pipeline costs more CPU than the NPU costs
+
+At 1920x1080, median of 5, measured on the board:
+
+| stage | ms | who does the work |
+|---|---:|---|
+| HTTP fetch of one snapshot | **101.7** | waiting for the camera's next frame |
+| PIL JPEG decode | **42.8** | CPU |
+| convert("RGB") + BICUBIC resize to 640x360 | **85.7** | CPU |
+| **frame total** | **230.2** | |
+| NPU inference | 233 | NPU |
+
+⚠️ **The resize is the single most expensive step, not the decode.** It also
+cannot be swapped for something faster: OpenCV's `INTER_CUBIC` measures
+|dscore| 0.0390 against PIL BICUBIC's 0.0000 -- larger than the entire int8
+quantization error. That 85 ms is the price of matching what the model was
+calibrated on.
+
+⚠️ **ustreamer itself costs almost nothing.** The camera emits MJPEG and
+ustreamer forwards it, so the 101.7 ms is dominated by waiting for the next
+frame, not by processing.
+
+### Resolution changes the CPU cost and nothing else
+
+| camera mode | model_ms | fetch_ms | total_ms |
+|---|---:|---:|---:|
+| 640x480 | 230 | 261-348 | 522-608 |
+| **1920x1080** | **233** | 274-311 | **607-638** |
+| 3840x2160 (4K) | 233 | 336-367 | **896-916** |
+
+**Inference is identical at all three** because every frame is scaled to the
+model's 640x384 regardless. 4K therefore costs ~300 ms per frame to decode
+and discard pixels the model never sees. **1080p is the sweet spot**: same
+accuracy as 4K, 300 ms cheaper, and visibly better than 640x480 for a human
+watching in Mainsail.
+
+### Camera facts worth not rediscovering
+
+- **Auto-exposure costs 3.4x the frame rate.** Measured at 1080p:
+  auto 7.66 fps, manual exposure 25.84 fps. In dim light the sensor extends
+  exposure time to gain brightness. **Leave it on anyway** -- detection needs
+  ~4 fps and brightness matters more than frames PiNozCam would discard.
+- **The descriptor's 60 fps is not real**: 25.8 fps was the measured best,
+  and only with auto-exposure disabled.
+- **No 4K@60**: the UVC descriptor offers 4K@30 *or* 1080p@60, never both.
+- UVC does not expose the CMOS sensor model; only the USB identity
+  (`0edc:3080`, `DH-220902-ZW`) is visible. Reading it requires opening the
+  module or asking the vendor.
+
+### ⏳ Idea, not implemented: ask ustreamer for two resolutions
+
+crowsnest can run more than one stream. Serving 1080p for humans and
+640x480 for the detector would cut the decode+resize cost (~128 ms) to
+nearly nothing, since 640x480 needs almost no scaling to reach 640x384.
+**Not measured, and it is unknown whether feeding the model a 640x480
+source changes accuracy** -- the letterbox geometry differs from 1080p's.
+Revisit after the core loop is finished.

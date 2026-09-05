@@ -349,7 +349,7 @@ class DiscordBot(object):
         self.connected = False
 
     def _run(self):
-        # websocket-client ships with OctoPrint, but importing at module
+        # websocket-client is a declared dependency, but importing at module
         # scope would make this file unimportable if that ever changed.
         """Connect, and keep reconnecting, until stopped.
 

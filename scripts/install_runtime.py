@@ -21,10 +21,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUNTIME_VERSION = "1.1.0"
 
 RELEASE_BASE = (
+    # Runtime wheels are published as assets on the PiNozCam release
+    # repository; the Klipper build consumes the same artifacts.
     "https://github.com/DrAlexLiu/OctoPrint-PiNozCam/releases/download")
 
 # Only these two have a PyPI project; everything else resolves from a
-# Release asset. Keep in step with setup.py's _PYPI_PUBLISHED_DISTS.
+# Release asset. Keep in step with the runtime publishing workflow.
 PYPI_DISTS = frozenset(("pinozcam-runtime", "pinozcam-runtime-gpu"))
 
 DISTS = {

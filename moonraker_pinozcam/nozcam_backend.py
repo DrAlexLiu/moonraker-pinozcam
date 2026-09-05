@@ -530,10 +530,14 @@ def _runtime_directories(plugin_dir, kind, chip):
         return bin_dir, model_dir, target
 
     # Source-checkout fallback accepts either package or repository root.
-    legacy_roots = (
-        plugin_dir,
-        os.path.join(plugin_dir, "octoprint_pinozcam"),
-    )
+    # plugin_dir is optional here: a service that always installs its
+    # runtime as a package passes None, and must not crash on the join.
+    legacy_roots = ()
+    if plugin_dir:
+        legacy_roots = (
+            plugin_dir,
+            os.path.join(plugin_dir, "moonraker_pinozcam"),
+        )
     for legacy_root in legacy_roots:
         bin_dir = os.path.join(legacy_root, "static", "bin")
         model_dir = os.path.join(legacy_root, "static", "models")
@@ -841,10 +845,10 @@ class NozcamBackend(object):
         which lives under the CANN install rather than on the default
         loader path, so without these directories it dies immediately with
         "libascendcl.so => not found". CANN's own set_env.sh exports them,
-        but a daemon spawned by OctoPrint inherits whatever environment
-        OctoPrint was started in -- under systemd, that is not a login
+        but a daemon spawned by a service inherits whatever environment
+        that service was started in -- under systemd, that is not a login
         shell and set_env.sh never ran. Injecting the paths here keeps the
-        backend working however OctoPrint itself was launched, instead of
+        backend working however the host service itself was launched, instead of
         making the service unit responsible for it.
 
         The failure this prevents is quiet: the daemon crashes, the
@@ -911,7 +915,7 @@ class NozcamBackend(object):
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                # Do not inherit OctoPrint camera or notification sockets.
+                # Do not inherit the parent's camera or notification sockets.
                 # This is descriptor hygiene, not a network sandbox.
                 close_fds=True,
                 bufsize=0,
@@ -1248,7 +1252,7 @@ class NozcamBackend(object):
     def _fit(image):
         """Return a letterboxed model canvas, content rect, and turn flag.
 
-        Portrait input is turned clockwise after OctoPrint's transforms. The
+        Portrait input is turned clockwise after the caller's transforms. The
         content rect excludes padding from the daemon's severity denominator.
         """
         image = image.convert("RGB")
@@ -1269,7 +1273,7 @@ class NozcamBackend(object):
 
     @staticmethod
     def _unfit(box, rect, turned, width, height):
-        """Map one canvas box back to the post-OctoPrint input image.
+        """Map one canvas box back to the post-transform input image.
 
         Only this backend's portrait turn is undone; upstream transforms stay.
         """

@@ -208,7 +208,7 @@ def select_ai_cpus(cpu_speed_control, topology):
     landing on zero or on more than the pool has.
 
     Homogeneous boards keep detect.py's existing _thread_calculation()
-    behaviour of reserving one CPU for OctoPrint/gcode streaming below
+    behaviour of reserving one CPU for the host and gcode streaming below
     100%. Heterogeneous boards skip that reservation on purpose: the
     LITTLE cores outside the pool are free for the system regardless of
     how much of the performance pool AI takes.

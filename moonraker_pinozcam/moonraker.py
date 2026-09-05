@@ -1,10 +1,8 @@
 """Moonraker client: printer state over WebSocket, control over REST.
 
-Threading, not asyncio, on purpose. The OctoPrint plugin runs inside a
-synchronous Flask process and so uses threads with blocking I/O throughout;
-keeping that model here lets telegram_bot.py and discord_bot.py port over
-unchanged, which is worth more than an event loop this program has no other
-use for.
+Threading, not asyncio, on purpose. The bot modules this service reuses are written against threads and
+blocking I/O, so keeping that model lets them be shared verbatim -- worth
+more than an event loop this program has no other use for.
 """
 
 import json
