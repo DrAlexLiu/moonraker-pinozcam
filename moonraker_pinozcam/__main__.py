@@ -204,17 +204,32 @@ def main(argv=None):
         be held open between prints.
         """
         LOG.info("printer: %s", state)
+        previous, on_state_change.previous = on_state_change.previous, \
+            ("paused" if state.is_paused else state.state)
         if state.is_printing and not detector.running:
-            LOG.info("Print started -- beginning detection")
-            # Invalidate confirmations from the previous job: a button
-            # pressed now must not act on the print that just started.
-            notifier.new_print()
-            detector.start()
+            # ⚠️ Distinguish a NEW print from a resume. Pausing stops the
+            # detector, so resuming came through here too and called
+            # new_print() -- which wipes the window, un-mutes alerts and
+            # re-arms the failure episode. A user who paused, fixed
+            # something and resumed lost all of that silently. The
+            # OctoPrint build only clears state on a real PRINT_STARTED.
+            # Klipper's own transition says which this is: a print that
+            # was paused comes back as paused -> printing, anything else is
+            # a new job. Read from the state we last saw, not guessed from
+            # a filename that is identical either way.
+            resumed = previous == "paused"
+            if resumed:
+                LOG.info("Print resumed -- continuing detection")
+            else:
+                LOG.info("Print started -- beginning detection")
+                notifier.new_print()
+            detector.start(fresh=not resumed)
         elif not state.is_printing and detector.running:
             LOG.info("Print no longer active (%s) -- stopping detection",
                      state.state)
             detector.stop()
 
+    on_state_change.previous = None
     client._on_state_change = on_state_change
 
     def shutdown(signum, _frame):

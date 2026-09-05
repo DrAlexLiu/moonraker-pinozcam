@@ -170,6 +170,45 @@ def _absolutise(url, client):
     return "http://%s/%s" % (client.host, url.lstrip("/"))
 
 
+def transform_image(image, source, logger=None):
+    """Apply the camera's flip and rotation to a decoded frame.
+
+    ⚠️ This must run BEFORE the mask and before inference. Moonraker
+    reports the rotation and flips the user set in Mainsail, and PiNozCam
+    read them into CameraSource and then never applied them -- so the
+    detector saw a differently-oriented picture from the one the frontend
+    shows, boxes came back in the wrong place, and a mask painted on the
+    displayed image covered the wrong region.
+
+    Flips first, then rotation, matching the OctoPrint build's
+    transform_image. ⚠️ `Image.rotate(90, expand=True)` is
+    COUNTER-clockwise; a rotation is not a transpose.
+
+    Moonraker's rotation is degrees (0/90/180/270), not OctoPrint's single
+    rotate90 boolean, so all four are handled.
+    """
+    from PIL import Image
+    flip_h = bool(getattr(source, "flip_h", False))
+    flip_v = bool(getattr(source, "flip_v", False))
+    rotation = int(getattr(source, "rotation", 0) or 0) % 360
+    if not (flip_h or flip_v or rotation):
+        return image
+    flags = (flip_h, flip_v, rotation)
+    if logger is not None and getattr(source, "_logged_transform", None) != flags:
+        source._logged_transform = flags
+        # Once per change, not per frame: at the default cadence that would
+        # be five identical lines a second.
+        logger.info("Camera transform: flipH=%s flipV=%s rotate=%d",
+                    flip_h, flip_v, rotation)
+    if flip_h:
+        image = image.transpose(Image.FLIP_LEFT_RIGHT)
+    if flip_v:
+        image = image.transpose(Image.FLIP_TOP_BOTTOM)
+    if rotation:
+        image = image.rotate(rotation, expand=True)
+    return image
+
+
 def build_frame_source(source, logger=None, identity="pinozcam"):
     """The right FrameSource for this camera's URL.
 

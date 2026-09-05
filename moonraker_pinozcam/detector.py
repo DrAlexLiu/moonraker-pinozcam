@@ -85,13 +85,20 @@ class Detector(object):
 
     # ---- lifecycle ----------------------------------------------------
 
-    def start(self):
-        """Start detecting. Safe to call when already running."""
+    def start(self, fresh=True):
+        """Start detecting. Safe to call when already running.
+
+        `fresh=False` keeps the failure window and the episode latch --
+        that is a RESUME, not a new job. Discarding them on resume threw
+        away the history the ratio is computed from and re-armed an episode
+        the user had already been told about.
+        """
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
-        self._fired = False
-        self.window.reset()
+        if fresh:
+            self._fired = False
+            self.window.reset()
         self._thread = threading.Thread(
             target=self._run, name="pinozcam-detect", daemon=True)
         self._thread.start()
@@ -337,6 +344,9 @@ class Detector(object):
 
         self.last_jpeg = frame.jpeg_bytes
         image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
+        # Before the mask and before inference: see camera.transform_image.
+        image = camera.transform_image(image, self.camera_source,
+                                       logger=self._log)
 
         # Mask before inference, not after: painting the ignored region
         # black means the model never sees it, so nothing there can score.

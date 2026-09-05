@@ -76,8 +76,16 @@ class FrameHolder(object):
             self._cv.notify_all()
 
     def latest(self):
+        """The newest annotated frame, or a live one.
+
+        ⚠️ Bounded by freshness. This used to return the annotated frame
+        whenever one had EVER been published, so after a print ended it
+        served that print's last frame forever -- to /check, to the mask
+        editor, and to Mainsail. A user painting an undetect zone would be
+        painting on a picture from hours ago.
+        """
         with self._cv:
-            if self._jpeg is not None:
+            if self._jpeg is not None and self._publishing():
                 return self._jpeg, self._seq
         return self._live(), self._seq
 

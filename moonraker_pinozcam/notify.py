@@ -168,7 +168,21 @@ class Notifier(ConfirmMixin):
     # printer_label() in another, exactly as upstream does.
     @property
     def printer_id(self):
-        return self.printer_label()
+        """A short, STABLE, colon-free tag for Discord's custom_id.
+
+        ⚠️ Not the display name. Discord packs this into a custom_id with
+        colons as separators, so a printer called "Bench: left" would break
+        parsing outright, and two printers sharing a name would answer each
+        other's buttons. Moonraker mints an instance_id once and keeps it;
+        the first eight hex digits are what identify us here, with the
+        display name reserved for what humans read.
+        """
+        configured = (self._cfg.get("printer", "name", "") or "").strip()
+        if configured:
+            # A user-set id is honoured, minus anything that would break
+            # the custom_id encoding.
+            return configured.replace(":", "-")[:24]
+        return self._client.instance_tag()
 
     def current_view_image(self):
         """The current camera view as a PIL image, or None.

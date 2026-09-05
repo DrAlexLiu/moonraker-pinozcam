@@ -89,6 +89,7 @@ class MoonrakerClient(object):
         self.state = PrinterState()
         self.connected = False
         self._printer_name = None
+        self._instance_tag = None
 
         self._ws = None
         self._thread = None
@@ -315,6 +316,25 @@ class MoonrakerClient(object):
         except (requests.RequestException, ValueError):
             pass
         return None
+
+    def instance_tag(self):
+        """A short, stable identity for this printer. Never a display name.
+
+        Moonraker mints `instance_id` once and keeps it in its database, so
+        it survives restarts and reinstalls and is unique per host -- which
+        a printer's name is not. Eight hex digits is enough to separate the
+        printers one person owns, and it carries no colon, which matters
+        because Discord packs this into a colon-separated custom_id.
+        """
+        if self._instance_tag is None:
+            instance = self._db_item("moonraker", "instance_id")
+            if instance:
+                self._instance_tag = "printer-%s" % str(instance)[:8]
+            else:
+                # No database yet. The hostname is stable and colon-free.
+                name = (self.printer_name() or "printer").replace(":", "-")
+                return name[:24]
+        return self._instance_tag
 
     def printer_name(self):
         """A label for this printer, mirroring the OctoPrint build.
