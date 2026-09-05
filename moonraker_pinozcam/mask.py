@@ -1,0 +1,93 @@
+"""Mask out regions the detector should ignore.
+
+Ported from the OctoPrint build's mask.py, keeping its arithmetic exactly.
+What is NOT ported is the camera-signature machinery: that build stores a
+signature derived from the camera URL and suspends the mask when the camera
+or aspect ratio changes, because a grid drawn against one picture blacks out
+an arbitrary region of a different one -- a silent detection hole. Here the
+camera is resolved from Moonraker or the config file and does not change
+under the service, so the mask is applied whenever one is set.
+
+⚠️ If this build ever gains camera switching, that machinery has to come
+with it. A stale mask does not fail loudly; it quietly hides part of the
+frame from detection.
+"""
+
+import math
+
+from PIL import ImageDraw
+
+# The grid the UI paints on. Kept equal to the OctoPrint build's so a mask
+# string can be copied between the two.
+MASK_GRID = 128
+
+
+def decode(data, grid=MASK_GRID):
+    """Decode a mask string into a square boolean matrix.
+
+    The stored resolution is taken from the string's length rather than
+    assumed, so a mask written by an older version (64x64 = 4096 chars)
+    still loads; anything smaller is upscaled by nearest neighbour, which
+    is exact for power-of-two ratios. Users never have to redraw.
+    """
+    empty = [[False] * grid for _ in range(grid)]
+    if not data:
+        return empty
+    size = int(math.sqrt(len(data)))
+    if size == 0 or size * size != len(data):
+        return empty            # not square -- ignore rather than guess
+    rows = [[data[r * size + c] == "1" for c in range(size)]
+            for r in range(size)]
+    if size == grid:
+        return rows
+    return [[rows[r * size // grid][c * size // grid] for c in range(grid)]
+            for r in range(grid)]
+
+
+def encode(matrix):
+    """Encode a boolean matrix back into the stored string form."""
+    return "".join("1" if cell else "0" for row in matrix for cell in row)
+
+
+def is_empty(data):
+    return not data or "1" not in data
+
+
+def apply_to_image(image, data, grid=MASK_GRID):
+    """Return a copy of `image` with masked cells painted black."""
+    masked = image.convert("RGB")
+    if is_empty(data):
+        return masked
+    matrix = decode(data, grid)
+    if not any(any(row) for row in matrix):
+        return masked
+
+    draw = ImageDraw.Draw(masked)
+    width, height = masked.size
+    for row in range(grid):
+        # Compute both edges from the exact ratio rather than multiplying a
+        # rounded-up block size, which overran the image by up to 63 px on
+        # heights that are not a multiple of the grid.
+        y1 = height * row // grid
+        y2 = height * (row + 1) // grid
+        col = 0
+        while col < grid:
+            if not matrix[row][col]:
+                col += 1
+                continue
+            # Merge horizontally adjacent cells into one rectangle: 128x128
+            # cells would otherwise be up to 16384 draw calls per frame,
+            # which matters on a 1 GHz A53.
+            start = col
+            while col < grid and matrix[row][col]:
+                col += 1
+            x1 = width * start // grid
+            x2 = width * col // grid
+            # A frame smaller than the grid collapses cells to zero extent,
+            # and Pillow rejects a rectangle whose second corner precedes
+            # its first. Skipping them is correct -- a sub-pixel cell has
+            # nothing to cover, and the mask becomes as coarse as the frame
+            # allows.
+            if x2 > x1 and y2 > y1:
+                draw.rectangle((x1, y1, x2 - 1, y2 - 1), fill=(0, 0, 0))
+    return masked

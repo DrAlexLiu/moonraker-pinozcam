@@ -10,7 +10,7 @@ what gcode streaming also needs.
 import threading
 import time
 
-from . import annotate, camera, cpu_affinity, framesource, nozcam_backend
+from . import annotate, camera, cpu_affinity, framesource, mask, nozcam_backend
 from .window import FailureWindow
 
 # One tick of the loop. It is independent of the frame source's own rate: a source may produce
@@ -45,6 +45,7 @@ class Detector(object):
         self._start_delay = d["ai_start_delay"]
         self._cpu_share = d["cpu_share"]
         self._cpus = None          # resolved once, at setup
+        self._mask = config.camera.get("mask_image_data") or ""
 
         self.window = FailureWindow(
             count_time=d["count_time"], failure_ratio=d["failure_ratio"])
@@ -200,8 +201,16 @@ class Detector(object):
 
         self.last_jpeg = frame.jpeg_bytes
         image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
+
+        # Mask before inference, not after: painting the ignored region
+        # black means the model never sees it, so nothing there can score.
+        # Filtering detections afterwards would still let a masked region
+        # influence the letterbox content rect and the severity fraction.
+        scored_image = (mask.apply_to_image(image, self._mask)
+                        if not mask.is_empty(self._mask) else image)
+
         scores, boxes, labels, severity, pct_area, elapsed = \
-            self._backend.infer(image, self._score_threshold,
+            self._backend.infer(scored_image, self._score_threshold,
                                 self._sensitivity, self._cpus)
 
         alarming = severity >= ALARM_SEVERITY
@@ -217,8 +226,11 @@ class Detector(object):
         # JPEG per frame, so skip it when nothing is watching.
         if self._view is not None and self._view.enabled:
             try:
+                # Annotate the MASKED image so the view shows exactly what
+                # the detector saw -- a user looking at an unmasked picture
+                # would wonder why an obvious failure was ignored.
                 self._view.publish(
-                    annotate.annotate(image, boxes, scores, severity))
+                    annotate.annotate(scored_image, boxes, scores, severity))
             except Exception as exc:                         # noqa: BLE001
                 self._log.debug("could not annotate frame: %s", exc)
 
