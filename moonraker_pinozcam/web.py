@@ -409,7 +409,6 @@ class AnnotatedView(object):
         "count_time": (int, 10, 3600),
         "ai_start_delay": (int, 0, 60000),
         "detection_interval": (int, 0, 3600),
-        "print_layout_threshold": (float, 0.0, 1.0),
         "frame_sample_interval": (int, 10, 1000),
         "frame_buffer_max_age": (int, 4, 16),
         "frame_buffer_capacity": (int, 4, 16),

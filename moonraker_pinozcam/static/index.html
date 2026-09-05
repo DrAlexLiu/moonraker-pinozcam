@@ -391,9 +391,7 @@ detection:[
  ["action","Action on Failure","sel",{options:[[0,"Alert only"],[1,"Pause"],[2,"Stop"]]},
   "Alert only sends the message without touching the printer."],
  ["ai_start_delay","Detection Start Delay (s)","num",{min:0,max:60000,step:10},
-  "Skip this many seconds at the start of a print, while the first layer goes down."],
- ["print_layout_threshold","Display Score Threshold","num",{min:0,max:1,step:0.05},
-  "How much of the frame may already be print before a detection there is discounted."]],
+  "Skip this many seconds at the start of a print, while the first layer goes down."]],
 performance:[
  ["ai_backend","Compute Backend","sel",{options:[["auto","Auto-detect"],["cpu","CPU"],["rknn","Rockchip NPU"],["awnn","Allwinner NPU"],["acl","Ascend NPU"],["bpu","Horizon BPU"],["vulkan","GPU"],["coreml","Apple Neural Engine"]]},
   "Auto-detect picks the fastest hardware this board actually has. Forcing one fails loudly if that hardware is missing, rather than quietly using something slower. Takes effect at the next print."],

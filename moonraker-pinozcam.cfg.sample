@@ -51,9 +51,11 @@ count_time = 120
 #                                                   (failureRatio)
 failure_ratio = 0.05
 
-# How much of the frame may be print before a detection is discounted.
-#                                                   (printLayoutThreshold)
-print_layout_threshold = 0.5
+# ⚠️ print_layout_threshold is deliberately absent. The OctoPrint build
+# has the setting and nothing in it reads the value either -- it is stored
+# and never used. Shipping a control that does nothing is worse than not
+# having one, so this build leaves it out rather than reproducing it. The
+# key is still read if present, so an imported config will not break.
 
 # Milliseconds between samples, 10-1000.            (frameSampleInterval)
 frame_sample_interval = 200

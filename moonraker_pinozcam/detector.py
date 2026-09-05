@@ -348,6 +348,27 @@ class Detector(object):
                 "The undetect zone was painted for a different camera "
                 "geometry and is not being applied. Repaint it.")
 
+    def _boxes_to_draw(self, scores, boxes):
+        """The (box, score) pairs the annotated view shows.
+
+        ⚠️ The backend returns every detection NMS kept, down to its decode
+        floor -- far below the score threshold the detector actually
+        counts. Drawing all of them put boxes on the picture that
+        contributed nothing to the failure area, in the alert photo and in
+        Mainsail's camera list, which is precisely the disagreement
+        upstream's boxes_to_draw exists to prevent.
+
+        A `break`, not a filter, because scores arrive sorted descending
+        from NMS -- kept identical to upstream, including that a stray low
+        score mid-list would end the list there.
+        """
+        shown = []
+        for box, score in zip(boxes or [], scores or []):
+            if score < self._score_threshold:
+                break
+            shown.append((box, score))
+        return shown
+
     @staticmethod
     def _measure_sharpness(image):
         """High-pass energy on a centre crop, without NumPy.
@@ -531,8 +552,10 @@ class Detector(object):
                 # Annotate the MASKED image so the view shows exactly what
                 # the detector saw -- a user looking at an unmasked picture
                 # would wonder why an obvious failure was ignored.
-                self._view.publish(
-                    annotate.annotate(scored_image, boxes, scores, severity))
+                shown = self._boxes_to_draw(scores, boxes)
+                self._view.publish(annotate.annotate(
+                    scored_image, [b for b, _ in shown],
+                    [sc for _, sc in shown], alarming))
             except Exception as exc:                         # noqa: BLE001
                 self._log.debug("could not annotate frame: %s", exc)
 

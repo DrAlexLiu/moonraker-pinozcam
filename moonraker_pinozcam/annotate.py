@@ -18,17 +18,22 @@ ALARM_COLOR = (255, 64, 64)
 QUIET_COLOR = (255, 196, 0)
 
 
-def annotate(image, boxes, scores, severity, quality=85):
+def annotate(image, boxes, scores, alarming, quality=85):
     """Return JPEG bytes of `image` with `boxes` drawn on it.
 
     Colour carries the verdict: amber for detections that are present but
-    below the alarm level, red once severity crosses it. A user glancing at
+    below the alarm level, red once the frame counts as alarming. A user
+    glancing at
     a phone should not have to read numbers to know which it is.
     """
     frame = image.convert("RGB")
     draw = ImageDraw.Draw(frame)
     width = max(_MIN_WIDTH, min(frame.size) // _WIDTH_DIVISOR)
-    colour = ALARM_COLOR if severity >= 0.5 else QUIET_COLOR
+    # ⚠️ The detector's own verdict, not a threshold re-derived here. This
+    # used to test severity >= 0.5, which turns red at HALF the configured
+    # area -- so the picture went red on frames the detector did not count
+    # as alarming at all.
+    colour = ALARM_COLOR if alarming else QUIET_COLOR
 
     for index, box in enumerate(boxes or []):
         try:
