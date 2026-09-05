@@ -90,6 +90,19 @@ fi
 
 # --------------------------------------------------------------------------
 say "3/4  Cleaning up moonraker.conf"
+# Back up the WHOLE config directory before editing anything in it, the way
+# KIAUH's BackupService does. Editing moonraker.conf badly is the one thing
+# here that can stop a printer from starting, and a user who has to recover
+# from that wants every file as it was, not just the one we touched. The
+# directory is text config -- a few tens of KB.
+if [ -n "${MOONRAKER_CONF}" ] && [ -d "${CONFIG_DIR:=$(dirname "${MOONRAKER_CONF}")}" ]; then
+    BACKUP_DIR="${HOME}/pinozcam-config-backup-$(date +%Y%m%d-%H%M%S)"
+    if cp -a "${CONFIG_DIR}" "${BACKUP_DIR}" 2>/dev/null; then
+        ok "config directory backed up to ${BACKUP_DIR##*/}"
+    else
+        warn "could not back up the config directory; continuing"
+    fi
+fi
 if [ -n "${MOONRAKER_CONF}" ] && [ -f "${MOONRAKER_CONF}" ] \
    && grep -q "^\[update_manager ${PROJECT_NAME}\]" "${MOONRAKER_CONF}"; then
     cp "${MOONRAKER_CONF}" "${MOONRAKER_CONF}.pinozcam-uninstall-backup"
@@ -124,6 +137,9 @@ CFG_DIR="$(dirname "${MOONRAKER_CONF:-$HOME/printer_data/config/x}")"
 cat <<DONE
 
   PiNozCam has been removed.
+
+  A full copy of your config directory was saved next to it, in case
+  anything above went wrong.
 
   Kept on purpose:
     ${CFG_DIR}/moonraker-pinozcam.cfg   your settings and bot tokens

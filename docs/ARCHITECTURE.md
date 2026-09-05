@@ -498,3 +498,75 @@ USB controller drops bytes under that particular delay. ⚠️ And it was
 measured **while not printing** — klippy's motion planning is idle, so the
 contention picture during a real job differs. Re-run `sched_delay.py`
 against the Prusa Mini during an actual print.
+
+---
+
+## 12. Installing and uninstalling in this ecosystem
+
+### KIAUH does not call your scripts — it reimplements removal
+
+`kiauh/extensions/obico/moonraker_obico_extension.py`:
+
+```python
+def remove_extension(self, **kwargs) -> None:
+    self._remove_obico_instances(ob_instances)
+    self._remove_obico_dir()
+    self._remove_obico_env()
+    BackupService().backup_printer_config_dir()
+    remove_config_section(f"include {OBICO_MACROS_CFG_NAME}", kl_instances)
+    remove_config_section(f"include {OBICO_UPDATE_CFG_NAME}", mr_instances)
+```
+
+⚠️ So "KIAUH requires `remove_extension`, therefore we need uninstall.sh" is
+**wrong reasoning** -- KIAUH removes things itself and never runs a
+project's own uninstaller. `uninstall.sh` exists for the users who install
+directly, which is most of them.
+
+Two things worth copying from that method, though:
+
+**① Back up the whole config directory, not just the file being edited.**
+KIAUH calls `backup_printer_config_dir()` before touching anything.
+Editing `moonraker.conf` badly is the one action here that can stop a
+printer from starting, and a user recovering from that wants every file as
+it was. Measured on a CB2 the directory is **48 KB / 13 files** -- the cost
+is nothing. Implemented in `uninstall.sh`.
+
+**② ⏳ NOT YET NEEDED, BUT REMEMBER: remove Klipper-side includes.**
+KIAUH strips `include <macros>.cfg` from `printer.cfg` as well as the
+`update_manager` section from `moonraker.conf`. PiNozCam ships no Klipper
+macros yet, so there is nothing to strip. **The moment a macro file is
+added, uninstall must remove its `[include]` too** -- an include pointing
+at a deleted file does not degrade, it makes Klipper **refuse to start**:
+
+```
+Include file '/home/biqu/printer_data/config/generic-bigtreetech-xxx.cfg'
+does not exist
+...
+Printer is halted
+```
+
+That is exactly the state the CB2 arrived in from the factory, so it is not
+hypothetical.
+
+### install.sh and uninstall.sh stay separate
+
+Their failure modes are opposite: install is idempotent and safe to repeat,
+uninstall is destructive and confirms first (`-y` to skip). Folding removal
+into `install.sh -u` would also have meant never testing it on its own --
+and testing it on its own is what caught this:
+
+```bash
+# Always false under `set -o pipefail`:
+systemctl list-unit-files | grep -q "^${SERVICE_NAME}.service"
+```
+
+`grep -q` exits at the first match, `systemctl` dies of SIGPIPE writing the
+remaining ~360 lines, the pipeline reports failure, and the script announced
+**"no service was installed" while leaving the service running**.
+
+⚠️ **This is the same pipefail trap twice in one day, in two shapes** --
+the first was `strings x | grep -m1` in `setup_accelerator.sh`. The lesson
+is not "remember that one line": it is that **`cmd | grep -q` under
+pipefail is unsafe whenever `cmd` produces more output than the match**.
+Ask about the single object instead (`systemctl cat unit`), or capture
+first and test after.
