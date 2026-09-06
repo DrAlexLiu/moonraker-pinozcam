@@ -703,12 +703,27 @@ $("b-welcome-done").onclick=async()=>{
    the browser; this build annotates server-side because it also
    registers that view as a Moonraker webcam, and Mainsail renders it as
    a plain <img> that cannot draw anything of its own. */
-const FLASH_MS=3000;
+const FLASH_MS=3000, LIVE_RETRY_MS=30000;
 let pinAnalysis=false;          // the button: hold the analysed view
 let flashActive=false, flashFrameId=null, flashTimer=null;
 let wantFrameId=null, shownSrc=null, streamInfo=null;
+/* Which of the two ways to reach the camera is in use. `direct` is the
+   camera's own address and costs this service nothing; `proxy` is a
+   relative path this service pumps itself, and is what covers the case
+   the direct address is not reachable from where the browser sits -- a
+   proxy publishing only this port, a tunnel, a host with no nginx. Both
+   are tried before giving up on live video, because an <img> that cannot
+   load says nothing about WHY. */
+let liveVia="direct", liveBroken=false, liveRetryTimer=null;
 
-function liveShowing(){ return !!streamInfo&&!pinAnalysis&&!flashActive; }
+function liveUrl(){
+  if(!streamInfo)return null;
+  if(liveVia==="proxy"||!streamInfo.url)return streamInfo.proxy||null;
+  return streamInfo.url;
+}
+function liveShowing(){
+  return !!liveUrl()&&!pinAnalysis&&!flashActive&&!liveBroken;
+}
 
 function refresh(){
   const live=liveShowing();
@@ -724,7 +739,7 @@ function refresh(){
   // ⚠️ A hidden tab must DROP the stream, not just stop looking at it: an
   // <img> on an MJPEG URL holds the connection open, and ustreamer counts
   // clients. Blanking the src closes it; becoming visible re-opens it.
-  const src=live?(document.hidden?"":streamInfo.url)
+  const src=live?(document.hidden?"":liveUrl())
                 :("snapshot?"+encodeURIComponent(wantFrameId||Date.now()));
   if(src!==shownSrc){ shownSrc=src; $("view").src=src; }
   drawBoxes();
@@ -834,10 +849,25 @@ $("view").addEventListener("load", drawBoxes);
    ⚠️ An <img> pointed at an MJPEG stream never reconnects on its own: if
    the camera restarts, the connection dies and the element sits on its
    last frame with nothing in the page noticing. Re-point it. */
+/* An <img> reports only that it failed, never why -- an unreachable host,
+   a dead camera and a 503 from the proxy's viewer cap look identical. So
+   work down the list rather than guessing: direct, then proxy, then
+   stills, then try live again much later in case the network changed. */
 $("view").addEventListener("error",()=>{
   if(!liveShowing())return;
   shownSrc=null;                       // force refresh() to re-assign
-  setTimeout(refresh,2000);
+  if(liveVia==="direct"&&streamInfo&&streamInfo.proxy&&streamInfo.url){
+    liveVia="proxy";
+    setTimeout(refresh,300);
+    return;
+  }
+  liveBroken=true;                     // stills, which always work
+  if(liveRetryTimer===null){
+    liveRetryTimer=setTimeout(()=>{
+      liveRetryTimer=null; liveBroken=false; liveVia="direct"; refresh();
+    },LIVE_RETRY_MS);
+  }
+  refresh();
 });
 refresh();
 </script>

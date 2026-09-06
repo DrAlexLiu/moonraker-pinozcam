@@ -38,6 +38,13 @@ PUBLISHER_IDLE_AFTER = 3.0
 # whatever the hardware allows; a browser tab does not need more than this,
 # and each frame served costs a JPEG encode.
 STREAM_MAX_FPS = 5.0
+# How many browsers may pull the camera THROUGH this process at once. The
+# proxy is a byte pump -- no decode, no encode -- but 11.5 Mbit/s measured
+# on one viewer is still bandwidth taken from the detector, which is itself
+# memory-bandwidth bound. Beyond this a viewer is told 503 and its page
+# falls back to stills rather than everyone's video degrading together.
+CAMERA_PROXY_VIEWERS = 2
+CAMERA_PROXY_CHUNK = 65536
 
 # How long a stream waits for a new frame before sending the current one
 # again. Without this a paused detector would leave the browser hanging on
@@ -286,6 +293,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._snapshot()
         elif path == "/stream":
             self._stream()
+        elif path == "/camera":
+            self._camera()
         elif path == "/":
             self._page()
         elif path == "/api/settings":
@@ -343,6 +352,73 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(jpeg)
+
+    def _camera(self):
+        """Pump the camera's own stream through this service, unchanged.
+
+        The fallback for the case the direct URL cannot cover. Mainsail can
+        hand a browser the relative `/webcam/?action=stream` because it is
+        served by the very nginx that proxies it -- same origin, so the
+        browser resolves it correctly and never touches Moonraker. This
+        service is on another port, so the same string would resolve
+        against US. stream_info() answers that by rewriting the host, which
+        assumes the browser can also reach port 80: true on a stock
+        Mainsail host, false behind a proxy that publishes only this port,
+        and meaningless on a Klipper host with no nginx at all.
+
+        Here the relative path works because we ARE the origin. The cost is
+        that every byte crosses this process, so it is offered second and
+        capped -- see CAMERA_PROXY_VIEWERS.
+
+        Deliberately transparent: whatever the camera sends, including its
+        own multipart boundary, is what the browser gets. Re-framing it
+        would make this a second implementation of /stream's format and a
+        second thing that can disagree with the camera.
+        """
+        owner = self.server.owner
+        url = owner.camera_stream_url()
+        if not url:
+            return self.send_error(503, "no camera stream")
+        if not owner.proxy_acquire():
+            return self.send_error(503, "too many camera viewers")
+        try:
+            self._pump(url)
+        finally:
+            owner.proxy_release()
+
+    def _pump(self, url):
+        import requests
+        try:
+            # connect timeout, then read timeout: an MJPEG stream that
+            # stops sending is dead, and holding the thread would leak a
+            # proxy slot for as long as the browser stays open.
+            upstream = requests.get(url, stream=True, timeout=(5, 30))
+            upstream.raise_for_status()
+        except Exception as exc:                             # noqa: BLE001
+            self.server.owner.log_proxy_error(url, exc)
+            return self.send_error(502, "camera unreachable")
+        # No Content-Length is possible on a live stream, so the connection
+        # cannot be reused; say so rather than leaving the client waiting
+        # for a body that never ends.
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", upstream.headers.get(
+                "Content-Type", "multipart/x-mixed-replace"))
+            self.send_header("Cache-Control",
+                             "no-store, no-cache, must-revalidate")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            for chunk in upstream.iter_content(CAMERA_PROXY_CHUNK):
+                if self.server.stopping.is_set():
+                    break
+                if chunk:
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass            # the tab was closed; ordinary, not an error
+        finally:
+            upstream.close()
 
     def _stream(self):
         jpeg, seq = self.server.frames.latest()
@@ -488,6 +564,9 @@ class AnnotatedView(object):
         self._browser_camera = None        # (host, url) once resolved
         self.frames = FrameHolder(fallback=self._live_camera_jpeg)
         self._camera_source = None
+        self._proxy_lock = threading.Lock()
+        self._proxy_viewers = 0
+        self._proxy_error_at = 0.0
         self._stopping = threading.Event()
         self._server = None
         self._thread = None
@@ -517,6 +596,38 @@ class AnnotatedView(object):
             # last frame it had rather than an error.
             self._camera_source = None      # re-resolve next time
         return None
+
+    def camera_stream_url(self):
+        """The camera stream this process can fetch, for /camera to pump.
+
+        Deliberately the SAME url stream_info() would hand the browser
+        directly, before any host rewriting -- the proxy is a transport
+        fallback, not a second camera. So the rules that withhold a direct
+        stream withhold the proxy too, and there is one gate, not two.
+        """
+        info = self._stream_source()
+        return info[0].stream_url if info else None
+
+    def proxy_acquire(self):
+        with self._proxy_lock:
+            if self._proxy_viewers >= CAMERA_PROXY_VIEWERS:
+                return False
+            self._proxy_viewers += 1
+            return True
+
+    def proxy_release(self):
+        with self._proxy_lock:
+            self._proxy_viewers = max(0, self._proxy_viewers - 1)
+
+    def log_proxy_error(self, url, exc):
+        # Rate-limited: a browser retries a broken <img> on its own, and a
+        # camera that is down would otherwise fill the log at that rate.
+        now = time.monotonic()
+        if now - self._proxy_error_at < 30.0:
+            return
+        self._proxy_error_at = now
+        self._log.warning("camera proxy could not reach %s: %s",
+                          _redact_userinfo(url), exc)
 
     def _camera_reachable(self):
         """Whether the last frame served was a real one.
@@ -681,73 +792,98 @@ class AnnotatedView(object):
             return None
 
     def stream_info(self, request_host):
-        """The camera's OWN stream, if the browser could use it. Else None.
+        """How the page should show live video, or None for stills.
 
-        Feeds the page's Live Camera toggle. A direct browser-to-camera
-        connection costs this service nothing, and gives the camera's real
-        frame rate instead of ours -- we add nothing to a picture we are
-        not drawing boxes on.
+        Two ways, in preference order, because they fail in different
+        places:
 
-        None whenever the stream could show something other than what the
-        detector sees, which is the same set of rules the OctoPrint build
-        applies:
+        * `url` -- the camera's own address, opened by the BROWSER. Costs
+          this service nothing and runs at the camera's real frame rate.
+          Requires the browser to reach the camera's host and port, which
+          is not something this process can verify.
+        * `proxy` -- a relative path this service serves itself
+          (/camera). Always reachable wherever this page is, and always
+          present, because that is what makes it a fallback.
 
-        * a snapshot_url is set in the config, so the detector may be
-          watching a DIFFERENT camera than the one Moonraker streams;
-        * the resolved camera has no stream URL;
-        * rotation is set -- frames are turned before inference, and doing
-          the same to a live stream in CSS needs rotated-box layout or the
-          picture overflows;
-        * the URL is HLS or WebRTC, which an <img> cannot read.
+        None only when there should be no live view at all -- see
+        _stream_source for the rules, which are the OctoPrint build's.
 
-        The flip flags ride along: the raw stream is untransformed, so only
-        it needs them applied in CSS.
+        The flip flags ride along: the stream is untransformed either way,
+        so only it needs them applied in CSS.
+        """
+        info = self._stream_source()
+        if info is None:
+            return None
+        source, _ = info
+        out = {"flipH": bool(source.flip_h), "flipV": bool(source.flip_v),
+               # Relative on purpose: the browser resolves it against the
+               # origin it used to reach this page, so it works wherever
+               # this page works -- which is the whole point of the
+               # fallback. Handled by /camera.
+               "proxy": "camera"}
+        direct = self._direct_stream_url(source, request_host)
+        if direct:
+            # Preferred when present: the browser talks to the camera and
+            # not one byte crosses this process. Absent when the URL is one
+            # only THIS process can reach, in which case the page goes
+            # straight to the proxy instead of showing nothing.
+            out["url"] = direct
+        return out
 
-        ⚠️ The URL must also be reachable from the BROWSER. On a stock
-        Klipper host ustreamer binds 127.0.0.1 only, and the camera is
-        reached through nginx on port 80; Moonraker registers that as the
-        relative `/webcam/?action=stream`, meant to be resolved against the
-        frontend's origin. This page is on another port, so a relative URL
-        is resolved here against the host the browser used to reach us,
-        with our port dropped.
+    def _stream_source(self):
+        """The camera whose stream may be shown, or None.
+
+        The single gate for both the direct URL and the proxy: a reason to
+        withhold a live view is a reason to withhold both. Same rules as
+        the OctoPrint build.
         """
         if self._config.camera.get("snapshot_url"):
             return None                 # may not be the streamed camera
         detector = self._detector_ref[0] if self._detector_ref else None
         # The detector's camera while it runs; otherwise the one this view
-        # already resolved for its own idle fallback, so the toggle does
+        # already resolved for its own idle fallback, so the live view does
         # not have to wait for a print to appear.
         source = (getattr(detector, "camera_source", None)
                   or self._camera_source)
         if source is None or not source.stream_url or source.rotation:
             return None
         from . import camera as camera_mod
+        if camera_mod.is_hls_or_webrtc_stream_url(source.stream_url):
+            # <img> speaks MJPEG and nothing else, and proxying would not
+            # change that -- the browser still could not play it.
+            return None
+        return source, source.stream_url
+
+    def _direct_stream_url(self, source, request_host):
+        """The stream URL a BROWSER could open, or None if only we can.
+
+        ⚠️ Moonraker registers this camera as the relative
+        `/webcam/?action=stream` and camera.resolve() absolutised it
+        against the Moonraker host so THIS process could fetch it, which is
+        why it usually reads 127.0.0.1. Mainsail never has to do this: it
+        is served by the same nginx that proxies /webcam/, so the browser
+        resolves the relative path correctly on its own. Here the host the
+        browser used to reach us is put back in, keeping the port -- how a
+        relative URL was always meant to be read.
+
+        None when that rewrite cannot be justified, and None is not a
+        failure any more: the caller falls back to the proxy.
+        """
         from urllib.parse import urlparse, urlunparse
         url = source.stream_url
         host = (request_host or "").split(":")[0]
         parts = urlparse(url)
         if parts.hostname in ("127.0.0.1", "localhost", "::1"):
-            # ⚠️ That loopback is OURS, not the user's: Moonraker registers
-            # this camera as the relative `/webcam/?action=stream`, and
-            # camera.resolve() absolutised it against the Moonraker host so
-            # THIS process could fetch it. A browser cannot. Put the host it
-            # used to reach us back in, keeping the port -- which is how a
-            # relative URL was always meant to be read. Only for a URL we
-            # built ourselves; a loopback the user typed is excluded by the
-            # snapshot_url rule above.
+            # Only for a URL we built ourselves; a loopback the user typed
+            # is excluded by the snapshot_url rule in _stream_source.
             if source.origin not in ("moonraker", "nginx") or not host:
                 return None
             netloc = host if parts.port is None else "%s:%d" % (host,
                                                                 parts.port)
-            url = urlunparse(parts._replace(netloc=netloc))
-        elif url.startswith("/"):
-            if not host:
-                return None
-            url = "http://%s%s" % (host, url)
-        if camera_mod.is_hls_or_webrtc_stream_url(url):
-            return None
-        return {"url": url, "flipH": bool(source.flip_h),
-                "flipV": bool(source.flip_v)}
+            return urlunparse(parts._replace(netloc=netloc))
+        if url.startswith("/"):
+            return "http://%s%s" % (host, url) if host else None
+        return url
 
     def read_status(self, request_host=""):
         detector = self._detector_ref[0] if self._detector_ref else None
