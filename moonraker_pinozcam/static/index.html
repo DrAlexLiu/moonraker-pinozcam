@@ -106,6 +106,14 @@ h4{margin:0;font-size:15px;font-weight:600}
 .f:last-child{border-bottom:0}
 .f-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .f label{font-size:13px}
+/* Says whether a stored credential exists, since the field itself cannot
+   show one -- see SECRET_MASK. Without it a masked box reads as an empty
+   box, i.e. as a token that went missing. */
+.f .sec-badge{font-size:10.5px;letter-spacing:.02em;padding:1px 6px;
+  border-radius:999px;background:var(--panel2);color:var(--dim);
+  white-space:nowrap}
+.f .sec-badge.on{background:rgba(76,175,80,.16);color:#7fd18a}
+.f .sec-badge.edit{background:rgba(255,193,7,.16);color:#e2b53d}
 .f .help{color:var(--dim);font-size:12px;margin-top:6px;display:none;
   padding-left:2px;border-left:2px solid var(--line);padding:6px 0 6px 9px}
 .f.open .help{display:block}
@@ -410,13 +418,13 @@ notify:[
  ["telegram_enabled","Enable Telegram","check",{},
   "Monitoring: send /hi or press Check for the current camera view. Alerts: a detected failure sends the analysed frame with its boxes."],
  ["telegram_token","Telegram Bot Token","text",{secret:1},
-  "From @BotFather. Stored on the printer and never sent back to this page — the dots mean one is saved. Type a new one to replace it, or clear the field to remove it."],
+  "From @BotFather. Stored on the printer and never sent back to this page — the dots mean one is saved, and leaving them alone keeps it. Type a new one to replace it, or clear the field to remove it."],
  ["telegram_chat_id","Telegram Chat ID","text",{},
   "The chat the bot talks to. Send your bot a message and it will tell you."],
  ["discord_enabled","Enable Discord","check",{},
   "Monitoring: send !check or press Check for the current camera view. Alerts: a detected failure sends the analysed frame with its boxes."],
  ["discord_bot_token","Discord Bot Token","text",{secret:1},
-  "From the Discord developer portal. Stored on the printer and never sent back to this page."],
+  "From the Discord developer portal. Stored on the printer and never sent back to this page — the dots mean one is saved, and leaving them alone keeps it. Type a new one to replace it, or clear the field to remove it."],
  ["discord_channel_id","Discord Channel ID","text",{},
   "Right-click the channel with Developer Mode on and Copy Channel ID."]],
 camera:[
@@ -458,12 +466,14 @@ function build(){
         opt.secret?' spellcheck="false" autocomplete="off"':''}>`;
       else ctl=`<input type="number" id="f-${key}" min="${opt.min}" max="${opt.max}" step="${opt.step}">`;
       const row=document.createElement("div"); row.className="f";
-      row.innerHTML=`<div class="f-top"><label for="f-${key}">${label}</label>
+      row.innerHTML=`<div class="f-top"><label for="f-${key}">${label}${
+        opt.secret?` <span class="sec-badge" id="sb-${key}"></span>`:""}</label>
         <span style="display:flex;align-items:center;gap:9px">${ctl}
         ${help?'<span class="q" title="Explain this">?</span>':''}</span></div>
         ${help?`<div class="help">${help}</div>`:''}`;
       host.appendChild(row);
       if(help) row.querySelector(".q").onclick=()=>row.classList.toggle("open");
+      if(opt.secret) $("f-"+key).addEventListener("input",()=>secretBadge(key));
     }
   }
   document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
@@ -484,6 +494,20 @@ function matchLevel(){
       $("f-__level").value=n; $("lvlname").textContent=LEVEL_NAMES[n]; return; }
   $("lvlname").textContent="Custom";
 }
+/* What the server sends in place of a stored credential. Posting it back
+   means "unchanged" (web.py: SECRET_MASK), so it is a real value here, not
+   a placeholder attribute -- which is why the box looks filled but its
+   content is meaningless, and why the badge has to say what is behind it. */
+const SECRET_MASK="\u2022".repeat(8);
+
+function secretBadge(key){
+  const b=$("sb-"+key), el=$("f-"+key);
+  if(!b||!el)return;
+  const v=el.value;
+  b.className="sec-badge"+(v===SECRET_MASK?" on":(v?" edit":""));
+  b.textContent=v===SECRET_MASK?"configured":(v?"will be saved":"not set");
+}
+
 async function load(){
   cur=await (await fetch("api/settings")).json();
   for(const pane in FIELDS) for(const [key,,kind] of FIELDS[pane]){
@@ -493,6 +517,8 @@ async function load(){
     else el.value=cur[key];
   }
   matchLevel();
+  for(const pane in FIELDS) for(const [key,,,opt] of FIELDS[pane])
+    if(opt.secret) secretBadge(key);
   mask=decodeMask(cur.mask_image_data||""); updateMeta();
 }
 async function save(){
