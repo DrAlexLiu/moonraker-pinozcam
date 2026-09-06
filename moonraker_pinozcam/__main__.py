@@ -251,6 +251,14 @@ def main(argv=None):
                      ", ".join(c.get("name", "?") for c in cams) or "none")
         except Exception as exc:                             # noqa: BLE001
             LOG.warning("could not list webcams: %s", exc)
+        # ⚠️ Only inside this branch. A Discord button carries the printer
+        # id, and the id falls back to the hostname while Moonraker's
+        # database is out of reach -- so asking before the connection is up
+        # would read a normal slow start as a rename.
+        try:
+            notifier.announce_button_id_change()
+        except Exception as exc:                             # noqa: BLE001
+            LOG.warning("could not check the Discord button id: %s", exc)
     else:
         # Not fatal: Moonraker may simply be starting later than we did,
         # and the client keeps retrying on its own.

@@ -336,6 +336,17 @@ class MoonrakerClient(object):
                 return name[:24]
         return self._instance_tag
 
+    def instance_tag_settled(self):
+        """Whether instance_tag() answered from the database, not the fallback.
+
+        ⚠️ instance_tag() returns the HOSTNAME while Moonraker's database is
+        out of reach, and deliberately does not cache that -- so the tag can
+        legitimately change once during startup. Anything that reacts to the
+        tag CHANGING has to wait for this, or a slow Moonraker looks like a
+        rename.
+        """
+        return self._instance_tag is not None
+
     def printer_name(self):
         """A label for this printer, mirroring the OctoPrint build.
 

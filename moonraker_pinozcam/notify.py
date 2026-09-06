@@ -21,6 +21,9 @@ the five OctoPrint methods the copied code calls; everything else in this
 file is the Klipper-specific half.
 """
 
+import io
+import json
+import os
 import re
 import threading
 import time
@@ -183,6 +186,108 @@ class Notifier(ConfirmMixin):
             # the custom_id encoding.
             return configured.replace(":", "-")[:24]
         return self._client.instance_tag()
+
+    def button_id_settled(self):
+        """Whether printer_id is final, so a change in it means a rename.
+
+        A configured name is final the moment it is read; the instance tag
+        is not, until Moonraker's database answers.
+        """
+        if (self._cfg.get("printer", "name", "") or "").strip():
+            return True
+        self.printer_id                      # resolve before asking
+        return self._client.instance_tag_settled()
+
+    def announce_button_id_change(self):
+        """Re-issue Discord buttons when the id they carry has changed.
+
+        ⚠️ Renaming a printer silently disables its Discord remote control.
+        Every button carries printer_id in its custom_id and DiscordBot
+        drops any interaction naming a different printer WITHOUT an ACK, on
+        purpose, so the owning instance can answer inside the three-second
+        deadline. There is no error, no reply and no INFO log -- the Stop
+        button in the channel simply stops working, which is the worst
+        moment to discover a rename. So say it, with buttons that work.
+
+        Telegram needs none of this: its buttons carry no printer id.
+
+        Not routed through alert(): this is an operational notice, so it is
+        exempt from the alert budget and from mute, exactly as a camera
+        going blind is.
+        """
+        if not self.button_id_settled():
+            self._logger.debug("printer id not settled yet; not announcing")
+            return
+        path = self._cfg.state_path()
+        if path is None:
+            return
+        current = self.printer_id
+        previous = self._read_state().get("discord_button_id")
+        if previous == current:
+            return
+        if previous is None:
+            # First run under a state file. Nothing was issued under
+            # another id by this service, so there is nothing to retract.
+            self._write_state(discord_button_id=current)
+            return
+        if self.discord_bot is None:
+            # ⚠️ Deliberately NOT persisted. With no channel to say it on,
+            # the announcement is still owed -- keeping the old id means it
+            # is made the next time Discord is configured, instead of being
+            # lost to a run that happened to have Discord off.
+            self._logger.info(
+                "Discord button id changed %s -> %s, but Discord is not "
+                "configured; older buttons stay dead until it is.",
+                previous, current)
+            return
+        self._logger.info("Discord button id changed %s -> %s; re-issuing "
+                          "buttons.", previous, current)
+        label = self.printer_label()
+        text = ("%s\n\nThis printer's buttons have been re-issued. Buttons "
+                "on earlier messages no longer respond -- use the ones "
+                "below." % label if label else
+                "This printer's buttons have been re-issued. Buttons on "
+                "earlier messages no longer respond -- use the ones below.")
+        try:
+            self.discord_bot.send(
+                content=text,
+                components=discord_buttons(
+                    current,
+                    paused=self._printer.get_state_id() == "PAUSED",
+                    muted=self.alerts_muted))
+        except Exception as exc:                             # noqa: BLE001
+            # Not persisted, so the announcement is retried next start.
+            self._logger.warning("could not re-issue Discord buttons: %s",
+                                 exc)
+            return
+        self._write_state(discord_button_id=current)
+
+    def _read_state(self):
+        path = self._cfg.state_path()
+        try:
+            with io.open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            # Missing is the normal first run; corrupt is treated the same
+            # way, because the only cost is one re-issued message.
+            return {}
+
+    def _write_state(self, **fields):
+        path = self._cfg.state_path()
+        data = self._read_state()
+        data.update(fields)
+        try:
+            # Written whole and renamed, so a power cut cannot leave a
+            # half-file that reads as "no memory" and re-announces.
+            tmp = path + ".tmp"
+            with io.open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            os.replace(tmp, path)
+        except OSError as exc:
+            self._logger.warning(
+                "could not write %s (%s); a printer rename will re-announce "
+                "its Discord buttons on every start", path, exc)
 
     def current_view_image(self):
         """The current camera view as a PIL image, or None.

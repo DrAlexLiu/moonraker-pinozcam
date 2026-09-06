@@ -253,6 +253,23 @@ class Config(object):
             "level": (self.get("logging", "level", "INFO") or "INFO").upper(),
         }
 
+    def state_path(self):
+        """Where this service keeps its own small state, or None.
+
+        Not the config file: the config is the user's, is edited in
+        Mainsail, and its mtime drives reload_if_changed() -- writing to it
+        from inside would both add noise to what the user reads and make
+        the service trigger its own reload.
+
+        Beside the config instead, dot-prefixed so a config editor's file
+        list stays what the user put there. None when the file cannot be
+        placed, which callers must treat as "no memory", never as an error.
+        """
+        config_dir = os.path.dirname(self.path)
+        if not os.path.isdir(config_dir):
+            return None
+        return os.path.join(config_dir, ".moonraker-pinozcam.state")
+
     def _log_path(self):
         """The log file to write, or None for journald only.
 
