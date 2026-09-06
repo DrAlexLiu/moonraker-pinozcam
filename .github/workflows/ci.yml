@@ -98,6 +98,34 @@ jobs:
           PY
           node --check /tmp/page.js
 
+      - name: The packaging scripts' repository files exist
+        # ⚠️ This check exists because its absence cost two failed builds.
+        # A path grep over the workflow YAML found nothing missing, because
+        # the packaging scripts compute their paths from ROOT in Python --
+        # THIRD_PARTY_LICENSES/ was simply not copied, and the failure only
+        # surfaced after twenty minutes of compiling ExecuTorch.
+        run: |
+          python3 - <<'PY'
+          import glob, io, os, re, sys
+          PATTERN = re.compile(r'os\.path\.join\(ROOT,\s*"([^"]+)"')
+          missing = []
+          for src in glob.glob("src/**/*.py", recursive=True):
+              for line in io.open(src, encoding="utf-8"):
+                  # ⚠️ Skip lines that ARE string literals: the packaging
+                  # scripts emit a loader containing its own
+                  # os.path.join(ROOT, "bin"), where ROOT is the installed
+                  # package, not this repository.
+                  if line.lstrip().startswith(("'", '"')):
+                      continue
+                  for name in PATTERN.findall(line):
+                      if not os.path.exists(name):
+                          missing.append("%s needs ./%s" % (src, name))
+          for line in sorted(set(missing)):
+              print("MISSING:", line)
+          print("checked; %d missing" % len(set(missing)))
+          sys.exit(1 if missing else 0)
+          PY
+
       - name: No credential is ever sent to the page
         # The page has no login and binds 0.0.0.0. read_settings() masks the
         # secrets; this fails if a new field is added to the wrong list.
