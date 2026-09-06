@@ -29,10 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 #
 #   1. PINOZCAM_RUNTIME_VERSION, for building or testing against another
 #      Release without editing anything;
-#   2. the tag this checkout is on, which is authoritative when there is
-#      one;
-#   3. moonraker_pinozcam.__version__ -- ONE version string in the tree,
-#      which a release must bump and CI checks against the tag.
+#   2. the tag this checkout is on, when it is a git checkout on one;
+#   3. the DIRECTORY NAME, because GitHub's source archive for a tag
+#      unpacks to `<repo>-<tag>` -- so a ZIP download carries its own
+#      version even with no .git, which is the case that made an RC ask
+#      for the release's assets;
+#   4. moonraker_pinozcam.__version__, for a plain branch checkout.
 def _package_version():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, root)
@@ -55,7 +57,25 @@ def _runtime_version():
     tag = out.stdout.decode("utf-8", "replace").strip()
     if out.returncode == 0 and tag:
         return tag.lstrip("v")
+    from_dir = _archive_version(root)
+    if from_dir:
+        return from_dir
     return _package_version()
+
+
+def _archive_version(root):
+    """The version in a GitHub source-archive directory name, or None.
+
+    `moonraker-pinozcam-1.1.0rc0` -> `1.1.0rc0`. Deliberately strict: it
+    only answers when what follows the repository name looks like a
+    version, so an ordinary clone in a directory someone renamed does not
+    get a version invented for it.
+    """
+    import re
+    name = os.path.basename(os.path.normpath(root))
+    match = re.match(r"^moonraker-pinozcam-(v?\d+\.\d+\.\d+[0-9A-Za-z.\-]*)$",
+                     name)
+    return match.group(1).lstrip("v") if match else None
 
 
 RUNTIME_VERSION = os.environ.get("PINOZCAM_RUNTIME_VERSION") \

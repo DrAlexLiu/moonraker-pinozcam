@@ -33,6 +33,8 @@ import urllib.request
 UPSTREAM = "DrAlexLiu/OctoPrint-PiNozCam"
 RAW = "https://raw.githubusercontent.com/%s/master/octoprint_pinozcam/%s"
 RELEASES = "https://api.github.com/repos/%s/releases/latest" % UPSTREAM
+OWN_RELEASES = ("https://api.github.com/repos/"
+                "DrAlexLiu/moonraker-pinozcam/releases/latest")
 
 # Copied verbatim from the OctoPrint build: the inference core and the
 # notification transports. They are deliberately NOT adapted, so any
@@ -195,25 +197,43 @@ def check_methods():
 
 
 def check_runtime_version():
-    pinned = None
-    path = os.path.join(HERE, "scripts", "install_runtime.py")
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            if line.startswith("RUNTIME_VERSION"):
-                pinned = line.split("=", 1)[1].strip().strip('"').strip("'")
-                break
-    if pinned is None:
-        print("  ! RUNTIME_VERSION not found")
+    """Compare the version the installer will ask for with what exists.
+
+    ⚠️ Two things about this were wrong and both were invisible, because
+    the summary line at the end counts only file drift:
+
+    * it read RUNTIME_VERSION by matching a line of text, and that line
+      became an expression -- so it "compared" the literal string
+      `os.environ.get("PINOZCAM_RUNTIME_VERSION") \` against a real
+      version and printed a DIFF nobody read. It imports the module now,
+      which is the only way to get the answer the installer will use.
+    * it compared against the OctoPrint build's latest release. The
+      installer stopped resolving there when this repository started
+      building its own Wheels, so the question is what THIS repository
+      has published.
+    """
+    sys.path.insert(0, os.path.join(HERE, "scripts"))
+    sys.path.insert(0, HERE)
+    try:
+        import install_runtime
+        pinned = install_runtime.RUNTIME_VERSION
+    except Exception as exc:                                 # noqa: BLE001
+        print("  ! could not read RUNTIME_VERSION: %s" % exc)
         return False
     try:
-        latest = json.loads(fetch(RELEASES))["tag_name"]
+        latest = json.loads(fetch(OWN_RELEASES))["tag_name"]
     except (urllib.error.URLError, OSError, KeyError, ValueError) as exc:
-        print("  ? pinned %s, upstream unreachable (%s)" % (pinned, exc))
+        # A repository with no Release yet is the normal state before the
+        # first one, not a failure -- but say which it is.
+        print("  ? installer wants %s; this repository has published no "
+              "release yet (%s)" % (pinned, type(exc).__name__))
         return True
     if pinned == latest:
-        print("  OK   runtime %s == upstream latest" % pinned)
+        print("  OK   runtime %s == this repository's latest release"
+              % pinned)
         return True
-    print("  DIFF runtime pinned %s, upstream latest %s" % (pinned, latest))
+    print("  DIFF installer wants %s, latest release here is %s"
+          % (pinned, latest))
     return False
 
 

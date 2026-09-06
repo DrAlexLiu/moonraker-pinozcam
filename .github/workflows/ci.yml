@@ -131,38 +131,37 @@ jobs:
           sys.exit(1 if missing else 0)
           PY
 
-      - name: One version string, and the installer agrees with it
-        # ⚠️ An RC could not install itself: the release workflow stamps
-        # the Wheels with the tag and the installer asked for a constant,
-        # so 1.1.0rc1 fetched 1.1.0 assets that do not exist. The
-        # installer reads __version__ now; this keeps the two from
-        # drifting, and on a tag build it checks the tag too, which is
-        # the only moment the answer actually matters.
+      - name: The installer asks for the Release this build produces
+        # ⚠️ Only ONE thing here can break a user, and only that fails the
+        # build: the installer resolving to a version whose Release
+        # assets do not exist. An RC did exactly that -- the release
+        # workflow stamps the Wheels with the tag while the installer
+        # asked for a constant.
+        #
+        # __version__ disagreeing with the tag is untidy, not broken: a
+        # tagged checkout reads the tag, and a source ZIP reads it from
+        # the directory GitHub unpacks it into. So it is a warning, and
+        # tagging does not require a version-bump commit first.
         run: |
           python3 - <<'PY'
-          import os, re, subprocess, sys
-          sys.path.insert(0, ".")
+          import os, sys
+          sys.path.insert(0, "."); sys.path.insert(0, "scripts")
           from moonraker_pinozcam import __version__ as v
-          sys.path.insert(0, "scripts")
           import install_runtime as ir
-          print("__version__      =", v)
-          print("RUNTIME_VERSION  =", ir.RUNTIME_VERSION)
-          bad = []
           ref = os.environ.get("GITHUB_REF", "")
-          if ref.startswith("refs/tags/"):
-              tag = ref.split("/", 2)[2].lstrip("v")
-              print("tag              =", tag)
-              if tag != v:
-                  bad.append("__version__ %r != tag %r" % (v, tag))
-              if ir.RUNTIME_VERSION != tag:
-                  bad.append("installer %r != tag %r"
-                             % (ir.RUNTIME_VERSION, tag))
-          elif ir.RUNTIME_VERSION != v:
-              bad.append("installer %r != __version__ %r"
-                         % (ir.RUNTIME_VERSION, v))
-          for line in bad:
-              print("MISMATCH:", line)
-          sys.exit(1 if bad else 0)
+          tag = ref.split("/", 2)[2].lstrip("v") \
+              if ref.startswith("refs/tags/") else None
+          print("__version__     =", v)
+          print("installer wants =", ir.RUNTIME_VERSION)
+          print("tag             =", tag or "(not a tag build)")
+          if tag and ir.RUNTIME_VERSION != tag:
+              print("FAIL: an install from this tag would fetch %r, but "
+                    "this build publishes %r" % (ir.RUNTIME_VERSION, tag))
+              sys.exit(1)
+          if tag and v != tag:
+              print("::warning::__version__ is %r while the tag is %r; "
+                    "harmless, but bump it when cutting the release" % (v, tag))
+          print("OK")
           PY
 
       - name: No accelerator is claimed that has no model
