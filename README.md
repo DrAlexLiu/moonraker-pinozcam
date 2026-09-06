@@ -98,8 +98,10 @@ against the threshold you set, and dialogs for the settings and for the
 undetect zone. It is the same layout as the OctoPrint plugin's tab.
 
 > **This page has no login and answers anyone who can reach the printer.**
-> That is why bot tokens are *not* editable there and are never sent to it
-> -- they live in the config file. Do not port-forward this port, or
+> A saved bot token is never sent back to it -- the field shows eight dots
+> and a badge saying one is stored -- but the field IS writable, so anyone
+> who can reach the port can replace your token, your camera URL and your
+> failure action. Do not port-forward this port, or
 > Moonraker's, to the public internet; see
 > [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) for what to do instead.
 

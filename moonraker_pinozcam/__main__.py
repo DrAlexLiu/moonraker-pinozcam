@@ -162,15 +162,28 @@ def main(argv=None):
             caption = "%s. %s" % (ACTION_NAMES[action], caption)
         elif action_failed:
             caption = "%s\n%s" % (action_failed, caption)
+        delivered = False
         try:
             jpeg = latest_jpeg()
-            notifier.alert(caption, image=jpeg)
+            delivered = bool(notifier.alert(caption, image=jpeg))
         except Exception as exc:                             # noqa: BLE001
             LOG.error("Could not send the alert: %s", exc)
 
         # Report back so the detector only latches this episode when
         # something actually happened.
-        return acted or action == 0
+        #
+        # ⚠️ `action == 0` used to stand in for success unconditionally, so
+        # "alert only" latched the episode even when every channel had
+        # failed: the quota was spent, nothing was delivered, and no later
+        # frame retried. With no channel configured at all there is nothing
+        # to deliver and nothing to retry, so that case still counts --
+        # otherwise a printer with no bots would re-run this handler on
+        # every single frame of the failure.
+        if acted:
+            return True
+        if action != 0:
+            return False
+        return delivered or not notifier.has_channel()
 
     # Probe the inference backend now rather than at the first print, so a
     # missing binary is visible in the startup log and on the page instead

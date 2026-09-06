@@ -71,7 +71,9 @@ class Detector(object):
         self._stop = threading.Event()
         self._source = None
         self._backend = None
-        self._fired = False                # one episode, not one per frame
+        # The action level already carried out this episode, or None
+        # while nothing has. Not a boolean -- see _decide.
+        self._fired_level = None
         self._paused_by_switch = False
         self._buffer = None
         self._buffer_max_age = None
@@ -112,7 +114,7 @@ class Detector(object):
             return
         self._stop.clear()
         if fresh:
-            self._fired = False
+            self._fired_level = None
             self.window.reset()
         self._thread = threading.Thread(
             target=self._run, name="pinozcam-detect", daemon=True)
@@ -332,7 +334,7 @@ class Detector(object):
             self._mask_fits = True
             return
         live = mask.signature(source_size, self.camera_source)
-        fits = (live == stored)
+        fits = mask.signature_matches(stored, live)
         if fits == self._mask_fits:
             return
         self._mask_fits = fits
@@ -480,7 +482,7 @@ class Detector(object):
             self._score_threshold = d["scores_threshold"]
             self.window.count_time = float(d["count_time"])
             self.window.reset()
-            self._fired = False
+            self._fired_level = None
             self._log.info(
                 "Detection criteria changed (%s); window and warm-up reset "
                 "-- results measured on the old scale are not comparable.",
@@ -568,17 +570,32 @@ class Detector(object):
         # One episode, not one alert per frame -- but an EPISODE, which
         # ends when the criterion stops being met. Re-arming here is what
         # makes a second failure later in the same print reportable.
+        # ⚠️ A LEVEL, not a flag. The configured action can be raised while
+        # a failure is still under way -- "alert only" was enough until the
+        # user looked at the picture and now wants it stopped -- and with a
+        # boolean that raise did nothing: the episode was already latched,
+        # so the printer kept going until the ratio fell back below the
+        # threshold and crossed it again. Upstream tracks the same thing as
+        # episode_action_level. 0 means nothing has fired this episode.
+        want = int(self._cfg.detection.get("action") or 0)
         if not met:
-            if self._fired:
+            if self._fired_level is not None:
                 self._log.info(
                     "Failure criterion cleared (%.0f%%); armed again.",
                     ratio * 100)
-            self._fired = False
-        elif not self._fired:
-            self._log.warning(
-                "FAILURE: %.0f%% of the last %ds alarmed (threshold %.0f%%)",
-                ratio * 100, self.window.count_time,
-                self.window.failure_ratio * 100)
+            self._fired_level = None
+        elif self._fired_level is None or want > self._fired_level:
+            if self._fired_level is None:
+                self._log.warning(
+                    "FAILURE: %.0f%% of the last %ds alarmed "
+                    "(threshold %.0f%%)",
+                    ratio * 100, self.window.count_time,
+                    self.window.failure_ratio * 100)
+            else:
+                self._log.warning(
+                    "Failure action raised from %d to %d while the failure "
+                    "was still under way; acting on the new one.",
+                    self._fired_level, want)
             # ⚠️ Latched only AFTER the handler reports success. Setting it
             # first meant one failed pause -- or one Telegram outage -- shut
             # detection up for the rest of the print: the flag stayed set,
@@ -591,7 +608,9 @@ class Detector(object):
                     self._log.error("failure handler raised: %s", exc)
             else:
                 handled = True
-            self._fired = bool(handled)
+            # Latch at the level that actually ran, so raising it again
+            # later in the same episode still gets through.
+            self._fired_level = want if handled else self._fired_level
             if not handled:
                 self._log.warning(
                     "The failure action did not complete; staying armed so "

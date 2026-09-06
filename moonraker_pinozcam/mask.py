@@ -1,3 +1,4 @@
+import hashlib
 """Mask out regions the detector should ignore.
 
 Ported from the OctoPrint build's mask.py, keeping its arithmetic exactly.
@@ -71,11 +72,55 @@ def signature(source_size, source):
     """
     width, height = source_size
     aspect = round(width / float(height), 3) if height else 0.0
-    return "%.3f|%d|%d%d" % (
+    return "%.3f|%d|%d%d|%s" % (
         aspect,
         int(getattr(source, "rotation", 0) or 0) % 360,
         int(bool(getattr(source, "flip_h", False))),
-        int(bool(getattr(source, "flip_v", False))))
+        int(bool(getattr(source, "flip_v", False))),
+        _camera_identity(source))
+
+
+def signature_matches(stored, live):
+    """Whether a stored signature still describes the live camera.
+
+    ⚠️ Not plain equality, because the identity field was added later. A
+    signature saved before it existed has three fields, and comparing it
+    to a four-field one would suspend every mask that already exists --
+    silently turning off a zone the user painted and relies on. An old
+    signature is honoured on its geometry alone, which is exactly the
+    guarantee it was written with; it gets the identity the next time the
+    mask is saved. A four-field signature is compared in full.
+    """
+    stored = (stored or "").strip()
+    live = (live or "").strip()
+    if not stored or not live:
+        return True
+    if stored.count("|") < 3:
+        return live.split("|")[:3] == stored.split("|")[:3]
+    return stored == live
+
+
+def _camera_identity(source):
+    """A short, stable fingerprint of WHICH camera this is.
+
+    ⚠️ Geometry alone is not identity. Two cameras of the same aspect ratio
+    -- the overwhelmingly common case, since almost everything is 16:9 --
+    produce the same signature, so pointing the config at a different one
+    kept applying a zone painted for the first and silently blacked out the
+    wrong region. Upstream's _camera_signature carries the source and the
+    URL for exactly this reason.
+
+    Hashed, not stored plain: the signature lives in the config file and is
+    shown on a page that has no login, and a snapshot URL can carry
+    credentials in its userinfo or query string.
+    """
+    url = (getattr(source, "snapshot_url", None)
+           or getattr(source, "stream_url", None) or "")
+    origin = getattr(source, "origin", "") or ""
+    if not url and not origin:
+        return "?"
+    digest = hashlib.sha256(("%s\0%s" % (origin, url)).encode("utf-8"))
+    return digest.hexdigest()[:12]
 
 
 def apply_to_image(image, data, grid=MASK_GRID):

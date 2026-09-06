@@ -379,11 +379,13 @@ class Notifier(ConfirmMixin):
         is the opposite of what the quota is for.
         """
         if budgeted and not self._within_budget():
-            return
+            return False
         if self.alerts_muted:
             self._logger.info("Muted; not sending: %s",
                               caption.split("\n")[0])
-            return
+            # Muting is a deliberate choice, not a delivery failure: the
+            # episode must still latch, or every frame re-fires the action.
+            return True
         label = self.printer_label()
         text = "%s\n%s" % (label, caption) if label else caption
         paused = self._printer.get_state_id() == "PAUSED"
@@ -398,11 +400,23 @@ class Notifier(ConfirmMixin):
         def stream():
             return BytesIO(payload) if payload else None
 
+        # ⚠️ Both transports report success and BOTH answers were thrown
+        # away. An alert that reached nobody was indistinguishable from one
+        # that reached both channels, so the episode latched, the quota was
+        # spent, and no later frame retried. TelegramBot.send returns the
+        # message id or None; DiscordBot.send returns True or a falsey
+        # value. Anything raising is a failure too, per channel, so one
+        # dead channel cannot mask a live one.
+        delivered = False
         if self.telegram_bot is not None:
             kb = telegram_buttons(paused=paused,
                                   muted=self.alerts_muted) if with_buttons \
                 else None
-            self.telegram_bot.send(caption=text, image=stream(), keyboard=kb)
+            try:
+                delivered = bool(self.telegram_bot.send(
+                    caption=text, image=stream(), keyboard=kb)) or delivered
+            except Exception as exc:                         # noqa: BLE001
+                self._logger.error("Telegram alert failed: %s", exc)
 
         if self.discord_bot is not None:
             # ⚠️ printer_id, NOT label. Discord packs this into the button's
@@ -415,8 +429,25 @@ class Notifier(ConfirmMixin):
             comp = discord_buttons(
                 self.printer_id, paused=paused,
                 muted=self.alerts_muted) if with_buttons else None
-            self.discord_bot.send(content=text, image=stream(),
-                                  components=comp)
+            try:
+                delivered = bool(self.discord_bot.send(
+                    content=text, image=stream(),
+                    components=comp)) or delivered
+            except Exception as exc:                         # noqa: BLE001
+                self._logger.error("Discord alert failed: %s", exc)
+        if not delivered:
+            self._logger.warning(
+                "Alert reached no channel; not counting it as sent.")
+        return delivered
+
+    def has_channel(self):
+        """Whether any channel is live, so a failure to deliver means something.
+
+        With no bot configured there is nothing to retry, and treating that
+        as a delivery failure would re-run the failure handler on every
+        frame for the whole episode.
+        """
+        return self.telegram_bot is not None or self.discord_bot is not None
 
     def _within_budget(self):
         """Whether an alert may be sent now, per the notification settings.

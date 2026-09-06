@@ -193,8 +193,25 @@ class FrameHolder(object):
         return self._live()
 
 
+# Query parameters whose VALUE is a credential. An IP camera's snapshot
+# URL routinely carries one, and this page has no login: whatever is
+# returned here is readable by anyone who can reach the port.
+_SECRET_QUERY_KEYS = frozenset((
+    "token", "auth", "key", "apikey", "api_key", "access_token",
+    "password", "passwd", "pwd", "secret", "sig", "signature",
+    "session", "sessionid", "auth_token", "authtoken",
+))
+
+
 def _redact_userinfo(url):
-    """Replace a URL's password with asterisks, keeping it recognisable.
+    """Replace a URL's credentials with asterisks, keeping it recognisable.
+
+    Two places carry them and BOTH must be covered:
+
+    * the userinfo, `http://user:password@host/...`;
+    * the query string, `http://host/snap?token=secret` -- which an audit
+      found returned in full. Redacting only the userinfo was worse than
+      redacting nothing, because the value looked handled.
 
     ⚠️ Parsed, not string-matched. A first attempt took the LAST "@" in
     the string, which for `http://a:b@h/p?x=y@z` is the one in the query
@@ -202,21 +219,42 @@ def _redact_userinfo(url):
     full. The authority is what "@" has to be looked for in, and urlsplit
     is what knows where the authority ends.
     """
-    from urllib.parse import urlsplit, urlunsplit
-    if not url or "@" not in url:
+    from urllib.parse import (urlsplit, urlunsplit, parse_qsl, urlencode,
+                              quote)
+    if not url:
         return url
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
-    if not parts.netloc or "@" not in parts.netloc:
+
+    netloc = parts.netloc
+    if netloc and "@" in netloc:
+        userinfo, _, hostport = netloc.rpartition("@")
+        user, colon, _password = userinfo.partition(":")
+        if colon:                       # a username alone is not a secret
+            netloc = "%s:***@%s" % (user, hostport)
+
+    query = parts.query
+    if query:
+        try:
+            pairs = parse_qsl(query, keep_blank_values=True)
+        except ValueError:
+            pairs = None
+        if pairs is not None:
+            # Rebuilt from the parsed pairs, so a value that merely looks
+            # like a separator cannot smuggle itself past the filter.
+            # safe="*@" so the asterisks stay readable and an "@" in a
+            # value is not re-encoded -- this string is shown to a human
+            # and posted back unchanged to mean "leave it alone".
+            query = urlencode(
+                [(k, "***" if k.lower() in _SECRET_QUERY_KEYS and v else v)
+                 for k, v in pairs],
+                quote_via=quote, safe="*@")
+
+    if netloc == parts.netloc and query == parts.query:
         return url
-    userinfo, _, hostport = parts.netloc.rpartition("@")
-    user, colon, _password = userinfo.partition(":")
-    if not colon:
-        return url                      # a username alone is not a secret
-    return urlunsplit(parts._replace(
-        netloc="%s:***@%s" % (user, hostport)))
+    return urlunsplit(parts._replace(netloc=netloc, query=query))
 
 
 class _Handler(BaseHTTPRequestHandler):

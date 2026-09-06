@@ -13,7 +13,7 @@ each piece comes from and where its licence text is.
 | piece | where it comes from | licence |
 |---|---|---|
 | this service (`moonraker_pinozcam/`) | this repository | AGPL-3.0 |
-| the inference runtime — daemon binaries + the model | a **wheel** downloaded from the OctoPrint build's GitHub Releases, matched to your board | see below |
+| the inference runtime — daemon binaries + the model | a **wheel** built by this repository's own CI from `src/`, downloaded from its GitHub Releases and matched to your board | see below |
 | Python dependencies | PyPI (`requirements.txt`) | their own |
 
 The runtime wheel is the same artifact OctoPrint users install. Both

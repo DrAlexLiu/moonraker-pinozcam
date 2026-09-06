@@ -8,6 +8,7 @@ unreadable file must fail with a message a user can act on.
 import configparser
 import io
 import os
+import threading
 
 
 class ConfigError(Exception):
@@ -21,11 +22,24 @@ class Config(object):
         self.path = os.path.expanduser(path)
         if not os.path.isfile(self.path):
             raise ConfigError("config file not found: %s" % self.path)
+        self._lock = threading.RLock()
         self._cp = configparser.ConfigParser()
+        # ⚠️ Stamp BEFORE reading, never after. Between the stat and the
+        # read someone may save; a stamp taken afterwards would name a
+        # moment newer than the content actually loaded, and
+        # reload_if_changed would then see no change and keep the stale
+        # copy. Taken first, the worst case is one redundant re-read.
+        self._mtime = self._stamp()
         try:
             self._cp.read(self.path)
         except configparser.Error as exc:
             raise ConfigError("%s is not valid INI: %s" % (self.path, exc))
+
+    def _stamp(self):
+        try:
+            return os.stat(self.path).st_mtime_ns
+        except OSError:
+            return None
 
     def reload_if_changed(self):
         """Re-read the file if it changed on disk. True if it did.
@@ -34,23 +48,28 @@ class Config(object):
         tell users to -- so "saved settings take effect" cannot mean only
         "settings saved through our own page". Cheap enough to call every
         detection tick: one stat().
+
+        ⚠️ There is no "first call" case, and there must not be one. An
+        earlier version established its baseline here instead of in
+        __init__ and returned False without re-reading -- so an edit made
+        between construction and the first poll advanced the baseline
+        while the old content stayed loaded, and that edit was lost for
+        good rather than merely delayed. __init__ stamps the file it read;
+        every call from then on is a real comparison.
         """
-        try:
-            stamp = os.stat(self.path).st_mtime_ns
-        except OSError:
-            return False
-        if stamp == getattr(self, "_mtime", None):
-            return False
-        first = not hasattr(self, "_mtime")
-        self._mtime = stamp
-        if first:
+        stamp = self._stamp()
+        if stamp is None or stamp == self._mtime:
             return False
         parser = configparser.ConfigParser()
         try:
             parser.read(self.path)
         except configparser.Error:
-            return False          # mid-save; try again next tick
-        self._cp = parser
+            # Mid-save: leave the stamp alone so the next tick tries again
+            # rather than treating a half-written file as seen.
+            return False
+        with self._lock:
+            self._cp = parser
+            self._mtime = stamp
         return True
 
     def _get(self, section, option, fallback=None):
@@ -109,7 +128,20 @@ class Config(object):
         documentation: there is no settings dialog explaining what
         failure_ratio means. So edit the lines in place instead, and append
         to the section only for keys that are not there yet.
+
+        ⚠️ Read-modify-write, so it must not interleave. The web server is
+        a ThreadingHTTPServer: saving settings and saving the mask are two
+        requests that can arrive together, and each one rewrites the whole
+        file from what it read. Without this lock the later writer wins
+        and the other's change is simply gone -- measured as lost updates
+        and FileNotFoundError, the latter because both writers used one
+        shared temporary path and the first rename removed it under the
+        second.
         """
+        with self._lock:
+            self._write_options_locked(section, values)
+
+    def _write_options_locked(self, section, values):
         with io.open(self.path, encoding="utf-8") as handle:
             lines = handle.read().splitlines()
 
@@ -150,14 +182,33 @@ class Config(object):
                 insert_at += 1
 
         # Write via a temporary file in the same directory: a truncated
-        # config on a power cut would stop the service from starting.
-        temp = self.path + ".tmp"
-        with io.open(temp, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
-        os.replace(temp, self.path)
+        # config on a power cut would stop the service from starting. The
+        # name carries the pid and this thread's id so two writers cannot
+        # share one, which the lock above already prevents inside a single
+        # process -- but a second instance pointed at the same config is a
+        # supported layout and must not corrupt it either.
+        temp = "%s.%d.%d.tmp" % (self.path, os.getpid(),
+                                 threading.current_thread().ident or 0)
+        try:
+            with io.open(temp, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+            os.replace(temp, self.path)
+        except BaseException:
+            # Never leave a stray temp behind for a config editor to show
+            # the user as a file they did not create.
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+            raise
 
         self._cp = configparser.ConfigParser()
         self._cp.read(self.path)
+        # The content just written IS what is loaded, so stamp it: leaving
+        # the old stamp makes the next reload_if_changed re-read our own
+        # write and report it as an external edit, which resets the
+        # detector's baseline for no reason.
+        self._mtime = self._stamp()
 
     # ---- typed views -------------------------------------------------
 

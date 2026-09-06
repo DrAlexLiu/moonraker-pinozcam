@@ -18,7 +18,32 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-RUNTIME_VERSION = "1.1.0"
+# The Release this installer pulls from. Read from the checkout when it is
+# on a tag, so installing an RC's source asks for that RC's Wheels: the
+# release workflow accepts 1.1.0rc* tags and stamps the Wheels with the
+# same version, and a hardcoded value sent every RC to the 1.1.0 assets --
+# which for an RC do not exist. Falls back to the constant for a checkout
+# that is not on a tag (a branch, or a source download with no git).
+_DEFAULT_RUNTIME_VERSION = "1.1.0"
+
+
+def _runtime_version():
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "describe", "--tags", "--exact-match"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:                                        # noqa: BLE001
+        return _DEFAULT_RUNTIME_VERSION
+    tag = out.stdout.decode("utf-8", "replace").strip()
+    if out.returncode == 0 and tag:
+        return tag.lstrip("v")
+    return _DEFAULT_RUNTIME_VERSION
+
+
+RUNTIME_VERSION = os.environ.get("PINOZCAM_RUNTIME_VERSION") \
+    or _runtime_version()
 
 RELEASE_BASE = (
     # This repository's own Releases. The wheels are built here, by

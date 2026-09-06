@@ -69,12 +69,17 @@ jobs:
           print('imported all but:', skipped or 'nothing')
           "
 
-      - name: Notification and command tests
-        # These are about DELIVERY -- which channel answers, what a button
-        # carries -- because that is the half a rewrite got wrong twice.
+      - name: Test suite
+        # ⚠️ Run every file, discovered rather than listed: an audit found
+        # nine blocking defects that this job, as it then stood, could not
+        # have caught -- it ran two notification scripts and nothing else.
+        # A new tests/*.py must not need a CI edit to be executed.
         run: |
-          python tests/test_commands.py
-          python tests/test_button_id.py
+          set -e
+          for t in tests/test_*.py; do
+            echo "--- $t"
+            python "$t"
+          done
 
   page:
     # The settings page is a single hand-written file with no build step, so

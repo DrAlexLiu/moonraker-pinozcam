@@ -205,7 +205,15 @@ def transform_image(image, source, logger=None):
     if flip_v:
         image = image.transpose(Image.FLIP_TOP_BOTTOM)
     if rotation:
-        image = image.rotate(rotation, expand=True)
+        # ⚠️ NEGATED on purpose. Moonraker's webcam spec defines `rotation`
+        # as "the amount of CLOCKWISE rotation" and Mainsail applies it as
+        # CSS `rotate(Ndeg)`, which is clockwise for a positive angle.
+        # PIL's Image.rotate is COUNTER-clockwise. Passing the value
+        # straight through turned every 90/270 camera 180 degrees away
+        # from what the user configured and from what Mainsail shows --
+        # and this detector is not rotation invariant, so that is a
+        # detection-accuracy defect, not a cosmetic one.
+        image = image.rotate(-rotation, expand=True)
     return image
 
 
