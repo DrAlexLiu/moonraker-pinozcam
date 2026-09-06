@@ -237,7 +237,11 @@ class Notifier(ConfirmMixin):
                 except Exception:
                     self.discord_bot.stop(timeout=0)
                     raise
-                self._logger.info("Discord bot started")
+                # The tag every button carries, and the only one this
+                # instance answers. Logged because a mismatch is otherwise
+                # undiagnosable: the drop is silent by design.
+                self._logger.info("Discord bot started; buttons tagged %s",
+                                  self.printer_id)
             except Exception as exc:                         # noqa: BLE001
                 self._logger.error("Discord bot could not start: %s", exc)
                 self.discord_bot = None
@@ -296,8 +300,15 @@ class Notifier(ConfirmMixin):
             self.telegram_bot.send(caption=text, image=stream(), keyboard=kb)
 
         if self.discord_bot is not None:
+            # ⚠️ printer_id, NOT label. Discord packs this into the button's
+            # custom_id and DiscordBot answers only the id it was built
+            # with; a button carrying anything else is dropped without an
+            # ACK and without an INFO log, so the press does nothing at all
+            # and leaves no trace. The two were the same string until
+            # printer_id became the instance tag, which is what made this
+            # call site wrong while the other two stayed right.
             comp = discord_buttons(
-                label, paused=paused,
+                self.printer_id, paused=paused,
                 muted=self.alerts_muted) if with_buttons else None
             self.discord_bot.send(content=text, image=stream(),
                                   components=comp)

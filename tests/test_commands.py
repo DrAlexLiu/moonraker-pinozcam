@@ -164,5 +164,36 @@ ck("both got bytes", t is not None and d is not None)
 ck("streams are distinct objects", t is not d)
 ck("both non-empty", len(t.read())>0 and len(d.read())>0)
 
+print("\n13. every Discord button carries the id the bot answers to")
+# ⚠️ The one assertion that would have caught a silent, total loss of
+# Discord remote control. DiscordBot is built with printer_id and drops any
+# interaction whose custom_id names a different printer -- without an ACK
+# and without an INFO log, so a dead button is indistinguishable from a
+# dead bot. alert() used to pass printer_LABEL here, which was the same
+# string until printer_id became the instance tag.
+def custom_ids(components):
+    return [b.get("custom_id","") for row in (components or [])
+            for b in row.get("components",[]) if b.get("custom_id")]
+
+n=build()
+want=n.printer_id
+ck("printer_id is not the display name", want!=n.printer_label(),
+   (want, n.printer_label()))
+n.alert("boom")
+ids=custom_ids(n.discord_bot.sent[0][2])
+ck("alert() produced buttons", len(ids)>0, ids)
+ck("alert() buttons carry printer_id",
+   all(i.split(":")[1]==want for i in ids), ids)
+ck("alert() buttons do NOT carry the label",
+   not any(n.printer_label() in i for i in ids), ids)
+
+# The command path builds its own buttons; the two must not disagree.
+n2=build(); n2.handle_discord_command("status", {"id":"i"})
+n2.alert("boom")
+sets={tuple(i.split(":")[1] for i in custom_ids(c))
+      for c in (m[2] for m in n2.discord_bot.sent) if custom_ids(c)}
+ck("alert and command paths agree on the id",
+   all(all(x==want for x in t) for t in sets), sets)
+
 print("\n%s" % ("ALL PASS" if not fails else "FAILED: %s"%fails))
 sys.exit(1 if fails else 0)
