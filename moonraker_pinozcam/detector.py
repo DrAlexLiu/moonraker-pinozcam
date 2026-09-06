@@ -116,6 +116,10 @@ class Detector(object):
         if fresh:
             self._fired_level = None
             self.window.reset()
+            # A camera read that began before this print must not land in
+            # it. Upstream bumps the epoch here for exactly that reason.
+            if self._buffer is not None:
+                self._buffer.bump_epoch()
         self._thread = threading.Thread(
             target=self._run, name="pinozcam-detect", daemon=True)
         self._thread.start()
@@ -312,12 +316,17 @@ class Detector(object):
                 self._pace(tick)
                 continue
             last_seq = frame.sequence
+            # ⚠️ One read of the attribute, used for BOTH the epoch and the
+            # put. _refresh runs on the consumer and can replace
+            # self._buffer between the two, and an epoch read from the old
+            # object means nothing to the new one.
+            buf = self._buffer
             if pushes:
-                last_accepted = self._sample_pushed(frame, last_accepted)
+                last_accepted = self._sample_pushed(buf, frame, last_accepted)
             else:
-                self._sample_pulled(frame)
+                self._sample_pulled(buf, frame)
 
-    def _sample_pushed(self, frame, last_accepted):
+    def _sample_pushed(self, buf, frame, last_accepted):
         """One frame from a camera that pushes, i.e. MJPEG.
 
         ⚠️ No sleeping. Pacing a push source throttles the CAMERA: a 30 fps
@@ -336,7 +345,8 @@ class Detector(object):
         * otherwise decode, score, and offer it.
         """
         now = time.monotonic()
-        if self._buffer.should_measure():
+        epoch = buf.epoch                       # read before the grab work
+        if buf.should_measure():
             if now - last_accepted < self._sample_interval:
                 return last_accepted            # no decode, no put
             image = self._decode(frame)
@@ -347,22 +357,24 @@ class Detector(object):
             image = self._decode(frame)
             if image is None:
                 return last_accepted
-            score = float("-inf")               # unmeasured
-        self._buffer.put(image, score, frame.captured_at)
+            score = framebuffer.UNMEASURED
+        if not buf.put(image, score, frame.captured_at, epoch):
+            return last_accepted                # retired mid-flight
         return now
 
-    def _sample_pulled(self, frame):
+    def _sample_pulled(self, buf, frame):
         """One frame from an HTTP-snapshot or static-file source.
 
         Those already self-pace to their own fixed rate inside
         framesource.py, so adding an interval here would pace them twice.
         """
+        epoch = buf.epoch                       # read before the grab work
         image = self._decode(frame)
         if image is None:
             return
         score = (self._measure_sharpness(image)
-                 if self._buffer.should_measure() else float("-inf"))
-        self._buffer.put(image, score, frame.captured_at)
+                 if buf.should_measure() else framebuffer.UNMEASURED)
+        buf.put(image, score, frame.captured_at, epoch)
 
     def _decode(self, frame):
         """Decode and transform one frame, or None if it cannot be used."""
@@ -538,6 +550,12 @@ class Detector(object):
             self.window.count_time = float(d["count_time"])
             self.window.reset()
             self._fired_level = None
+            # ⚠️ Retire what is buffered AND what is in flight. The window
+            # starts again here, and the candidates already held were
+            # grabbed under the criteria that just changed -- so without
+            # this the very first frame of the fresh window is the one
+            # most likely to predate it, which is upstream's reason too.
+            self._buffer.bump_epoch()
             self._log.info(
                 "Detection criteria changed (%s); window and warm-up reset "
                 "-- results measured on the old scale are not comparable.",
