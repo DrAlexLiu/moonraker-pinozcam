@@ -21,13 +21,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUNTIME_VERSION = "1.1.0"
 
 RELEASE_BASE = (
-    # Runtime wheels are published as assets on the PiNozCam release
-    # repository; the Klipper build consumes the same artifacts.
-    "https://github.com/DrAlexLiu/OctoPrint-PiNozCam/releases/download")
-
-# Only these two have a PyPI project; everything else resolves from a
-# Release asset. Keep in step with the runtime publishing workflow.
-PYPI_DISTS = frozenset(("pinozcam-runtime", "pinozcam-runtime-gpu"))
+    # This repository's own Releases. The wheels are built here, by
+    # .github/workflows/build-runtime-release.yml, from the sources in
+    # src/ -- so an install pulls artifacts from the same repository the
+    # rest of the service came from, and a tag pushed here is the only
+    # thing that changes what a user gets.
+    #
+    # ⚠️ Nothing is published to PyPI. Every target, without exception,
+    # resolves to a Release asset URL; there is no name-based fallback
+    # that could quietly resolve to somebody else's project.
+    "https://github.com/DrAlexLiu/moonraker-pinozcam/releases/download")
 
 DISTS = {
     "armhf": "pinozcam-runtime",
@@ -71,11 +74,8 @@ def detect_target():
 
 def requirement_for(target):
     """Return a pip requirement string for this target."""
-    dist = DISTS.get(target)
-    if dist is None:
+    if DISTS.get(target) is None:
         return None
-    if dist in PYPI_DISTS:
-        return "%s==%s" % (dist, RUNTIME_VERSION)
     wheel = WHEELS[target] % RUNTIME_VERSION
     return "%s/%s/%s" % (RELEASE_BASE, RUNTIME_VERSION, wheel)
 

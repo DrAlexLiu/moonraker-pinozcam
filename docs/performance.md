@@ -442,7 +442,8 @@ SoCs surveyed has an NPU this project can reach:
 
 That is adequate for a monitor that glances every few seconds, which is what
 this is. It is not competitive on latency with a cloud GPU, and it does not
-need to be — the whole point is that nothing leaves the printer.
+need to be — the whole point is that no frame is uploaded for the model to
+look at.
 
 If your board is on the slow end, the levers are `cpu_share` (already 0.75
 here), `detection_interval`, and accepting a longer `count_time` so the

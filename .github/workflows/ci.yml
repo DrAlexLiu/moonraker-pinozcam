@@ -1,0 +1,114 @@
+# What this repository can actually verify without a printer.
+#
+# ⚠️ There is nothing to copy from the OctoPrint build here: all twelve of
+# its workflows BUILD runtime Wheels for twelve hardware targets, and this
+# repository builds nothing -- it downloads those same Wheels from that
+# repository's Releases (scripts/install_runtime.py). So its CI answers a
+# question this one does not have, and this file answers one it does not.
+#
+# Everything below runs on a plain runner with no camera, no Klipper and no
+# NPU. The parts that need hardware -- inference, the detector loop, the
+# installer -- are verified on a real board and cannot be moved here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the README promises, and the version a current Klipper
+        # host actually has. A dependency that quietly drops the floor shows
+        # up here as a resolver failure rather than on someone's printer.
+        python: ["3.9", "3.13"]
+    steps:
+      # Pinned by commit, as the OctoPrint build pins its own actions: a tag
+      # can be moved, a commit cannot.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install runtime dependencies
+        # requirements.txt only, deliberately: the inference runtime is a
+        # separate Wheel per board and none of it is importable here.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Every module imports
+        # Catches a syntax error or a bad import on a Python this file
+        # claims to support, which no unit test would reach.
+        run: |
+          python -m compileall -q moonraker_pinozcam scripts tools tests
+          python -c "
+          import importlib, pkgutil, moonraker_pinozcam as p
+          skipped = []
+          for m in pkgutil.iter_modules(p.__path__):
+              name = 'moonraker_pinozcam.' + m.name
+              try:
+                  importlib.import_module(name)
+              except ImportError as exc:
+                  # nozcam_backend reaches for the per-board runtime Wheel.
+                  skipped.append('%s (%s)' % (name, exc))
+          print('imported all but:', skipped or 'nothing')
+          "
+
+      - name: Notification and command tests
+        # These are about DELIVERY -- which channel answers, what a button
+        # carries -- because that is the half a rewrite got wrong twice.
+        run: |
+          python tests/test_commands.py
+          python tests/test_button_id.py
+
+  page:
+    # The settings page is a single hand-written file with no build step, so
+    # a stray bracket ships silently. It broke the page once already.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: The page's JavaScript parses
+        run: |
+          python3 - <<'PY'
+          import io, re
+          html = io.open("moonraker_pinozcam/static/index.html",
+                         encoding="utf-8").read()
+          blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+          assert blocks, "no <script> block found -- did the page change shape?"
+          io.open("/tmp/page.js", "w", encoding="utf-8").write(
+              "\n".join(blocks))
+          print("extracted %d script block(s)" % len(blocks))
+          PY
+          node --check /tmp/page.js
+
+      - name: No credential is ever sent to the page
+        # The page has no login and binds 0.0.0.0. read_settings() masks the
+        # secrets; this fails if a new field is added to the wrong list.
+        run: |
+          python3 - <<'PY'
+          import io, re
+          web = io.open("moonraker_pinozcam/web.py", encoding="utf-8").read()
+          secrets = re.search(r"SECRETS = \(([^)]*)\)", web)
+          assert secrets, "SECRETS tuple is gone -- masking may be too"
+          names = set(re.findall(r'"([^"]+)"', secrets.group(1)))
+          assert {"token", "bot_token"} <= names, names
+          assert "SECRET_MASK" in web
+          print("masked:", sorted(names))
+          PY

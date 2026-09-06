@@ -9,10 +9,18 @@ Local AI print-failure detection for Klipper. It watches the print through
 your existing camera, and when the print starts to fail it tells you --
 optionally pausing or stopping the printer.
 
-**Everything runs on the printer's own board.** No account, no subscription,
-no images leaving your network, and it keeps working with the internet
-unplugged. That is the whole point of it: the alternative products in this
-space upload every frame to a server and charge a monthly fee.
+**The detection runs on the printer's own board.** No account, no
+subscription, and no frame is uploaded for the AI to look at -- it keeps
+detecting with the internet unplugged. That is the whole point of it: the
+alternative products in this space upload every frame to a server and charge
+a monthly fee.
+
+⚠️ The optional Telegram and Discord alerts are the exception, and worth
+being precise about: those **are** cloud services, so an alert's photo does
+travel to their servers, and both platforms retain messages indefinitely by
+default. It is the only thing that leaves your network, it happens only if
+you configure it, and detection itself never depends on it. See
+[Remote access](docs/REMOTE_ACCESS.md).
 
 > **Under development.** The detector, the notifications and the web view
 > are working and have been verified on real hardware, but this has not yet
