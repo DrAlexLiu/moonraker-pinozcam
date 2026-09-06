@@ -26,19 +26,18 @@ than a 420 px-wide table cell needs on a machine that also has to run a
 printer. They are therefore **not** byte-identical to upstream's copies;
 everything else here is.
 
-## No interface screenshots yet
+## No interface screenshots, by decision
 
 The OctoPrint build's remaining images are of **its** tab and settings
 pages, which do not exist here, so they were deliberately not copied and
-nothing was substituted for them. The README and the guides describe the
-page in words instead.
+nothing was substituted for them. Shots of this build's own page were
+considered and **decided against**: the images above already carry what a
+reader needs to judge the product -- the hardware, a real failure the
+detector caught, and the alerts as they arrive -- and the README and the
+guides describe the page in words. This is settled; do not re-open it as
+an outstanding task.
 
-When shots of this build's own page are taken, the ones worth having are
-the main view during a print, the settings dialog, the undetect-zone
-editor, and PiNozCam sitting in Mainsail's own camera list -- that last one
-being the thing this port does that the OctoPrint build has no equivalent
-of.
-
-⚠️ Whatever is captured, do not photograph a page with real credentials in
-frame. The settings page shows a saved token as eight dots and never the
-value, so that tab is safe by itself; the surrounding window may not be.
+⚠️ If that is ever revisited, do not photograph a page with real
+credentials in frame. The settings page shows a saved token as eight dots
+and never the value, so that tab is safe by itself; the surrounding window
+may not be.
