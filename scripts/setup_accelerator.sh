@@ -34,8 +34,16 @@ if [ -z "${CHIP}" ]; then
 fi
 ok "Rockchip ${CHIP} detected"
 
+# ⚠️ rk3568 is NOT in this list, deliberately. It was, and it was a false
+# promise: no nozcam-rk3568.rknn is built or shipped, and the backend's
+# _SUPPORTED_RKNN_CHIPS does not name it either -- so the board was told
+# its NPU was detected, had librknnrt.so installed for it, and then ran on
+# the CPU anyway. RK3568 is the same RK356x family as RK3566 and its model
+# may well load, but a .rknn carries a chip id and this project has
+# measured that they do not cross chips; nobody has an RK3568 to test on.
+# Add it when there is a model and a board to prove it, not before.
 case "${CHIP}" in
-    rk3566|rk3568|rk3576|rk3588) ;;
+    rk3566|rk3576|rk3588) ;;
     *) warn "${CHIP} has no NPU PiNozCam supports; using the CPU."; exit 0 ;;
 esac
 

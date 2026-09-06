@@ -74,6 +74,8 @@ class Detector(object):
         # The action level already carried out this episode, or None
         # while nothing has. Not a boolean -- see _decide.
         self._fired_level = None
+        # Last config generation applied to this detector's cached values.
+        self._cfg_generation = -1
         self._paused_by_switch = False
         self._buffer = None
         self._buffer_max_age = None
@@ -508,8 +510,16 @@ class Detector(object):
         * ai_start_delay and ai_backend are read once per run, because
           they decide how a run starts.
         """
-        if not self._cfg.reload_if_changed():
+        # Pick up an edit made outside this process (Mainsail's config
+        # editor), then decide on the GENERATION -- which also moves when
+        # the settings page saves through the Config object this detector
+        # shares with the web server, and which the file's mtime cannot
+        # report because that write is in-process.
+        self._cfg.reload_if_changed()
+        generation = self._cfg.generation
+        if generation == self._cfg_generation:
             return
+        self._cfg_generation = generation
         d = self._cfg.detection
         self._sample_interval = d["frame_sample_interval"]
         self._detection_interval = d["detection_interval"]

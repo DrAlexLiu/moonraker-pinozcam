@@ -18,13 +18,29 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# The Release this installer pulls from. Read from the checkout when it is
-# on a tag, so installing an RC's source asks for that RC's Wheels: the
+# The Release this installer pulls from.
+#
+# ⚠️ THREE sources, in this order, because a source ZIP has no git. The
 # release workflow accepts 1.1.0rc* tags and stamps the Wheels with the
-# same version, and a hardcoded value sent every RC to the 1.1.0 assets --
-# which for an RC do not exist. Falls back to the constant for a checkout
-# that is not on a tag (a branch, or a source download with no git).
-_DEFAULT_RUNTIME_VERSION = "1.1.0"
+# same version, so an RC that resolves to "1.1.0" asks for assets that do
+# not exist -- which is what a hardcoded constant did, and what reading
+# only the git tag still did for anyone who downloaded the ZIP rather
+# than cloning.
+#
+#   1. PINOZCAM_RUNTIME_VERSION, for building or testing against another
+#      Release without editing anything;
+#   2. the tag this checkout is on, which is authoritative when there is
+#      one;
+#   3. moonraker_pinozcam.__version__ -- ONE version string in the tree,
+#      which a release must bump and CI checks against the tag.
+def _package_version():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    try:
+        from moonraker_pinozcam import __version__
+        return __version__
+    except Exception:                                        # noqa: BLE001
+        return "1.1.0"
 
 
 def _runtime_version():
@@ -39,7 +55,7 @@ def _runtime_version():
     tag = out.stdout.decode("utf-8", "replace").strip()
     if out.returncode == 0 and tag:
         return tag.lstrip("v")
-    return _DEFAULT_RUNTIME_VERSION
+    return _package_version()
 
 
 RUNTIME_VERSION = os.environ.get("PINOZCAM_RUNTIME_VERSION") \

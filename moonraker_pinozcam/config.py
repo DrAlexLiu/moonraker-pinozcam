@@ -23,6 +23,14 @@ class Config(object):
         if not os.path.isfile(self.path):
             raise ConfigError("config file not found: %s" % self.path)
         self._lock = threading.RLock()
+        # Bumped every time the loaded content changes, by ANY route.
+        # ⚠️ Consumers must watch this, not reload_if_changed()'s boolean.
+        # One Config object is shared by the web server, the notifier and
+        # the detector, so a save from the settings page updates _cp
+        # in-process and the file's mtime tells the detector nothing --
+        # which is exactly how "saved successfully, detector kept the old
+        # value" happened.
+        self._generation = 0
         self._cp = configparser.ConfigParser()
         # ⚠️ Stamp BEFORE reading, never after. Between the stat and the
         # read someone may save; a stamp taken afterwards would name a
@@ -34,6 +42,11 @@ class Config(object):
             self._cp.read(self.path)
         except configparser.Error as exc:
             raise ConfigError("%s is not valid INI: %s" % (self.path, exc))
+
+    @property
+    def generation(self):
+        """Increments whenever the loaded content changes, by any route."""
+        return self._generation
 
     def _stamp(self):
         try:
@@ -70,6 +83,7 @@ class Config(object):
         with self._lock:
             self._cp = parser
             self._mtime = stamp
+            self._generation += 1
         return True
 
     def _get(self, section, option, fallback=None):
@@ -204,11 +218,13 @@ class Config(object):
 
         self._cp = configparser.ConfigParser()
         self._cp.read(self.path)
-        # The content just written IS what is loaded, so stamp it: leaving
-        # the old stamp makes the next reload_if_changed re-read our own
-        # write and report it as an external edit, which resets the
-        # detector's baseline for no reason.
+        # The content just written IS what is loaded, so stamp it -- a
+        # re-read would only load the same bytes again. The generation is
+        # what tells the detector something changed; without it, stamping
+        # here made reload_if_changed() return False and the detector went
+        # on using the values the page had just replaced.
         self._mtime = self._stamp()
+        self._generation += 1
 
     # ---- typed views -------------------------------------------------
 

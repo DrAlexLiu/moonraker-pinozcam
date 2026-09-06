@@ -131,6 +131,64 @@ jobs:
           sys.exit(1 if missing else 0)
           PY
 
+      - name: One version string, and the installer agrees with it
+        # ⚠️ An RC could not install itself: the release workflow stamps
+        # the Wheels with the tag and the installer asked for a constant,
+        # so 1.1.0rc1 fetched 1.1.0 assets that do not exist. The
+        # installer reads __version__ now; this keeps the two from
+        # drifting, and on a tag build it checks the tag too, which is
+        # the only moment the answer actually matters.
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          sys.path.insert(0, ".")
+          from moonraker_pinozcam import __version__ as v
+          sys.path.insert(0, "scripts")
+          import install_runtime as ir
+          print("__version__      =", v)
+          print("RUNTIME_VERSION  =", ir.RUNTIME_VERSION)
+          bad = []
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/"):
+              tag = ref.split("/", 2)[2].lstrip("v")
+              print("tag              =", tag)
+              if tag != v:
+                  bad.append("__version__ %r != tag %r" % (v, tag))
+              if ir.RUNTIME_VERSION != tag:
+                  bad.append("installer %r != tag %r"
+                             % (ir.RUNTIME_VERSION, tag))
+          elif ir.RUNTIME_VERSION != v:
+              bad.append("installer %r != __version__ %r"
+                         % (ir.RUNTIME_VERSION, v))
+          for line in bad:
+              print("MISMATCH:", line)
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: No accelerator is claimed that has no model
+        # setup_accelerator.sh once accepted rk3568, for which no model is
+        # built and which the backend does not support: the board was told
+        # its NPU was found and then ran on the CPU.
+        run: |
+          python3 - <<'PY'
+          import io, re, sys
+          sys.path.insert(0, ".")
+          from moonraker_pinozcam.nozcam_backend import _SUPPORTED_RKNN_CHIPS
+          sh = io.open("scripts/setup_accelerator.sh", encoding="utf-8").read()
+          m = re.search(r"case \"\$\{CHIP\}\" in\n\s*([a-z0-9|]+)\)", sh)
+          if not m:
+              print("could not find the chip list in setup_accelerator.sh")
+              sys.exit(1)
+          claimed = set(m.group(1).split("|"))
+          supported = set(_SUPPORTED_RKNN_CHIPS)
+          print("claimed  :", sorted(claimed))
+          print("supported:", sorted(supported))
+          extra = claimed - supported
+          if extra:
+              print("CLAIMED BUT UNSUPPORTED:", sorted(extra))
+          sys.exit(1 if extra else 0)
+          PY
+
       - name: No credential is ever sent to the page
         # The page has no login and binds 0.0.0.0. read_settings() masks the
         # secrets; this fails if a new field is added to the wrong list.
