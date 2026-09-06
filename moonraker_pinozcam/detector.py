@@ -301,26 +301,81 @@ class Detector(object):
         difference on every frame.
         """
         last_seq = -1
+        last_accepted = 0.0
+        pushes = isinstance(self._source, framesource.MjpegFrameSource)
         while not self._stop.is_set():
             tick = time.monotonic()
             frame = self._source.wait_next(last_seq, self._stop, FRAME_WAIT)
             if frame is None:
+                # Nothing arrived within FRAME_WAIT. Pace only here, so a
+                # source that returns instantly cannot spin the CPU.
                 self._pace(tick)
                 continue
             last_seq = frame.sequence
-            try:
-                image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
-                # The SOURCE size, captured before the transform -- which is
-                # what mask.signature is defined against.
-                self._check_mask_fits(image.size)
-                image = camera.transform_image(image, self.camera_source,
-                                               logger=self._log)
-                score = (self._measure_sharpness(image)
-                         if self._buffer.should_measure() else float("-inf"))
-                self._buffer.put(image, score, tick)
-            except Exception as exc:                         # noqa: BLE001
-                self._log.debug("could not sample a frame: %s", exc)
-            self._pace(tick)
+            if pushes:
+                last_accepted = self._sample_pushed(frame, last_accepted)
+            else:
+                self._sample_pulled(frame)
+
+    def _sample_pushed(self, frame, last_accepted):
+        """One frame from a camera that pushes, i.e. MJPEG.
+
+        ⚠️ No sleeping. Pacing a push source throttles the CAMERA: a 30 fps
+        stream was being held to one frame per frame_sample_interval, so a
+        board fast enough to score more never got the chance, and the
+        candidate the AI eventually took was chosen from five frames a
+        second instead of thirty. The interval belongs on DECODING, not on
+        the loop, which is what upstream's _sample_mjpeg_tick does:
+
+        * buffer shallow -- keep it unconditionally and do not score it;
+          an unmeasured candidate is only ever taken when nothing better
+          is waiting, and refusing it would leave the buffer empty;
+        * buffer deep but inside the interval -- drop the still-compressed
+          bytes untouched. This is the case worth having: it costs one
+          comparison, not a JPEG decode;
+        * otherwise decode, score, and offer it.
+        """
+        now = time.monotonic()
+        if self._buffer.should_measure():
+            if now - last_accepted < self._sample_interval:
+                return last_accepted            # no decode, no put
+            image = self._decode(frame)
+            if image is None:
+                return last_accepted
+            score = self._measure_sharpness(image)
+        else:
+            image = self._decode(frame)
+            if image is None:
+                return last_accepted
+            score = float("-inf")               # unmeasured
+        self._buffer.put(image, score, frame.captured_at)
+        return now
+
+    def _sample_pulled(self, frame):
+        """One frame from an HTTP-snapshot or static-file source.
+
+        Those already self-pace to their own fixed rate inside
+        framesource.py, so adding an interval here would pace them twice.
+        """
+        image = self._decode(frame)
+        if image is None:
+            return
+        score = (self._measure_sharpness(image)
+                 if self._buffer.should_measure() else float("-inf"))
+        self._buffer.put(image, score, frame.captured_at)
+
+    def _decode(self, frame):
+        """Decode and transform one frame, or None if it cannot be used."""
+        try:
+            image = Image.open(BytesIO(frame.jpeg_bytes)).convert("RGB")
+            # The SOURCE size, captured before the transform -- which is
+            # what mask.signature is defined against.
+            self._check_mask_fits(image.size)
+            return camera.transform_image(image, self.camera_source,
+                                          logger=self._log)
+        except Exception as exc:                             # noqa: BLE001
+            self._log.debug("could not sample a frame: %s", exc)
+            return None
 
     def _check_mask_fits(self, source_size):
         """Suspend the mask if the camera is no longer the one it was for.
@@ -489,7 +544,14 @@ class Detector(object):
                 ", ".join(changed))
 
     def _pace(self, tick_started):
-        """Sleep out the remainder of this tick, interruptibly."""
+        """Sleep out the remainder of this tick, interruptibly.
+
+        ⚠️ An anti-spin floor, NOT a rate limit. The consumer's real
+        cadence is `detection_interval`, checked separately; the sampler
+        calls this only when nothing arrived, so a source that returns
+        immediately cannot burn a core. It must never be applied to a
+        frame that WAS delivered -- doing that throttled the camera.
+        """
         remaining = self._sample_interval - (time.monotonic() - tick_started)
         if remaining > 0:
             self._stop.wait(remaining)
