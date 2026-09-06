@@ -287,6 +287,12 @@ class Config(object):
         return {
             "port": self.getint("web", "port", 58888),
             "register_webcam": self.getbool("web", "register_webcam", True),
+            # Empty means no login at all, which is the default and what
+            # this page has always done. Set it and the page and the whole
+            # settings API ask for it; see AnnotatedView._authorised for
+            # what deliberately stays open and why.
+            "user": self.get("web", "user", "pinozcam"),
+            "password": self.get("web", "password", ""),
         }
 
     # ⚠️ There is no `action` property, deliberately. An earlier one read

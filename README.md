@@ -97,11 +97,25 @@ The live view with detection boxes drawn on it, the current failure ratio
 against the threshold you set, and dialogs for the settings and for the
 undetect zone. It is the same layout as the OctoPrint plugin's tab.
 
-> **This page has no login and answers anyone who can reach the printer.**
-> A saved bot token is never sent back to it -- the field shows eight dots
-> and a badge saying one is stored -- but the field IS writable, so anyone
-> who can reach the port can replace your token, your camera URL and your
-> failure action. Do not port-forward this port, or
+> **By default this page has no login and answers anyone who can reach the
+> printer.** A saved bot token is never sent back to it -- the field shows
+> eight dots and a badge saying one is stored -- but the field IS writable,
+> so without a password anyone who can reach the port can replace your
+> token, your camera URL and your failure action.
+>
+> Set one and the page and the whole settings API ask for it:
+>
+> ```
+> ~/moonraker-pinozcam-env/bin/python -m moonraker_pinozcam \
+>     -c ~/printer_data/config/moonraker-pinozcam.cfg --set-password
+> ```
+>
+> It applies at once, with no restart. Snapshots and the stream stay open
+> so PiNozCam keeps working in Mainsail's camera list -- Mainsail renders a
+> webcam as a plain `<img>` carrying no credentials, and your host already
+> serves that same picture without a login on port 80. ⚠️ There is no TLS
+> here: a password stops someone browsing to the port, not someone who can
+> watch the traffic. Do not port-forward this port, or
 > Moonraker's, to the public internet; see
 > [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) for what to do instead.
 

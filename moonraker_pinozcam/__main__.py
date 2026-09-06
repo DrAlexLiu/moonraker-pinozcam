@@ -50,11 +50,59 @@ def setup_logging(cfg):
             LOG.warning("cannot write log file %s: %s", path, exc)
 
 
+def _set_password(config_path):
+    """Prompt for the annotated view's password and store it.
+
+    A command rather than a field on the page, deliberately: the page has
+    no login until this is set, so offering it there would let anyone who
+    can reach the port set one and lock the owner out. Reading it from a
+    prompt also keeps it out of the shell history that an argument would
+    land in.
+    """
+    import getpass
+    from .config import Config, ConfigError
+    try:
+        cfg = Config(config_path)
+    except ConfigError as exc:
+        print("  ! %s" % exc, file=sys.stderr)
+        return 1
+    current = (cfg.web.get("password") or "").strip()
+    user = (cfg.web.get("user") or "pinozcam").strip()
+    print("Config : %s" % cfg.path)
+    print("User   : %s   (change it with [web] user)" % user)
+    print("Status : %s" % ("a password is set" if current else "no password"))
+    print("Leave both prompts empty to remove the password.\n")
+    try:
+        first = getpass.getpass("New password: ")
+        again = getpass.getpass("Repeat       : ")
+    except (EOFError, KeyboardInterrupt):
+        print("\n  ! cancelled", file=sys.stderr)
+        return 1
+    if first != again:
+        print("  ! they do not match; nothing was changed", file=sys.stderr)
+        return 1
+    cfg.write_options("web", {"password": first})
+    if first:
+        print("\n  Password set. The page and the settings API now ask for")
+        print("  %s and this password. Snapshots and the stream stay open,"
+              % user)
+        print("  so PiNozCam keeps working in Mainsail's camera list.")
+    else:
+        print("\n  Password removed; the page answers anyone again.")
+    print("  Takes effect immediately -- no restart needed.")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="moonraker-pinozcam")
     ap.add_argument("-c", "--config", required=True,
                     help="path to moonraker-pinozcam.cfg")
+    ap.add_argument("--set-password", action="store_true",
+                    help="set or clear the web page's password, then exit")
     args = ap.parse_args(argv)
+
+    if args.set_password:
+        return _set_password(args.config)
 
     try:
         cfg = Config(args.config)

@@ -120,6 +120,25 @@ name =
 # registered with Moonraker so it appears in Mainsail/Fluidd's camera list.
 # Set port to 0 to disable and rely on Telegram/Discord alone.
 port = 58888
+
+# Optional password for the page and the settings API. Empty = no login,
+# which is the default. Set it with:
+#
+#     ~/moonraker-pinozcam-env/bin/python -m moonraker_pinozcam \
+#         -c ~/printer_data/config/moonraker-pinozcam.cfg --set-password
+#
+# ⚠️ Snapshots and the stream stay open even with a password set, so
+# PiNozCam keeps working in Mainsail's camera list -- Mainsail renders a
+# webcam as a plain <img> that carries no credentials. The picture is
+# already served without a login by your host's own camera on port 80, so
+# this exposes nothing new; what the password protects is everything that
+# can change the printer or read what is configured.
+#
+# ⚠️ There is no TLS here. A password stops someone browsing to the port;
+# it does not stop someone who can watch the traffic. Do not port-forward
+# this port either way.
+user = pinozcam
+password =
 register_webcam = true
 
 # ---- Logging ------------------------------------------------------------

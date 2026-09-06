@@ -315,6 +315,8 @@ class _Handler(BaseHTTPRequestHandler):
         if payload is None:
             return self._json({"error": "bad request"}, 400)
         try:
+            if not self._authorised(path):
+                return
             if path == "/api/settings":
                 owner.save_settings(payload)
             elif path == "/api/mask":
@@ -327,6 +329,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if not self._authorised(path):
+            return
         if path in ("/snapshot", "/current"):
             self._snapshot()
         elif path == "/stream":
@@ -351,6 +355,46 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         else:
             self.send_error(404)
+
+    # Endpoints that answer without a password even when one is set.
+    #
+    # ⚠️ A deliberate, documented line, not an oversight. /snapshot and
+    # /stream are what this service registers with Moonraker as a webcam,
+    # and Mainsail renders a webcam as a plain <img> carrying no
+    # credentials -- locking them would not protect the picture, it would
+    # replace the camera panel with a broken image. The picture itself is
+    # already served without a password by the host's own camera endpoint
+    # on port 80, so nothing new is exposed. What the password protects is
+    # everything that can CHANGE the printer or read what is configured.
+    OPEN_PATHS = frozenset(("/snapshot", "/current", "/stream", "/camera",
+                            "/health"))
+
+    def _authorised(self, path):
+        """True if this request may proceed. Sends the challenge if not."""
+        owner = self.server.owner
+        if path in self.OPEN_PATHS:
+            return True
+        # ⚠️ Re-read first. Only the detector polled the config, and only
+        # while a print is running -- so a password set between prints was
+        # written to the file and never noticed by the running server,
+        # which went on answering everyone. One stat() per guarded
+        # request is what makes "takes effect immediately" true.
+        owner.refresh_config()
+        if not owner.password:
+            return True
+        header = self.headers.get("Authorization") or ""
+        if owner.check_basic(header):
+            return True
+        # ⚠️ 401 with a challenge, so a browser prompts and then remembers.
+        # Anything else and the page would simply appear broken.
+        body = b"authentication required\n"
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="PiNozCam"')
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
 
     def _page(self):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -586,7 +630,13 @@ class AnnotatedView(object):
     # addresses. A chat or channel id is not usable without its token --
     # Discord channel ids are visible to everyone in the server -- and
     # masking them would leave no way to check what is configured.
-    SECRETS = ("token", "bot_token")
+    # ⚠️ `password` is here for the same reason as the bot tokens: this
+    # page must never hand back the credential that guards it. It is also
+    # absent from EDITABLE below, so it cannot be set or cleared through
+    # the API -- an unauthenticated caller could otherwise lock the owner
+    # out, and an authenticated one changing it mid-session is a footgun.
+    # It is set in the config file, or with --set-password.
+    SECRETS = ("token", "bot_token", "password")
 
     def __init__(self, config, client, logger, detector_ref=None,
                  notifier=None, backend_info=None):
@@ -634,6 +684,45 @@ class AnnotatedView(object):
             # last frame it had rather than an error.
             self._camera_source = None      # re-resolve next time
         return None
+
+    def refresh_config(self):
+        """Pick up an edit to the config file, ignoring any failure."""
+        try:
+            self._config.reload_if_changed()
+        except Exception:                                    # noqa: BLE001
+            pass                    # a broken file must not lock the page
+
+    @property
+    def password(self):
+        """The configured password, re-read each time so it can be changed.
+
+        Read live rather than cached at start: a user who sets one in
+        Mainsail's config editor should not have to restart the service to
+        be protected.
+        """
+        return (self._config.web.get("password") or "").strip()
+
+    def check_basic(self, header):
+        """Whether an Authorization header carries the configured login."""
+        import base64
+        import hmac
+        if not header.lower().startswith("basic "):
+            return False
+        try:
+            raw = base64.b64decode(header.split(None, 1)[1], validate=True)
+            user, _, given = raw.decode("utf-8", "replace").partition(":")
+        except Exception:                                    # noqa: BLE001
+            return False
+        web = self._config.web
+        want_user = (web.get("user") or "pinozcam").strip()
+        want_pass = (web.get("password") or "").strip()
+        # ⚠️ compare_digest on BOTH, and both compared even when the first
+        # already failed: a plain == leaks the answer through how long it
+        # takes, and short-circuiting on the username leaks which half was
+        # wrong.
+        ok_user = hmac.compare_digest(user, want_user)
+        ok_pass = hmac.compare_digest(given, want_pass)
+        return ok_user and ok_pass
 
     def camera_stream_url(self):
         """The camera stream this process can fetch, for /camera to pump.
